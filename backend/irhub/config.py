@@ -56,4 +56,4 @@ class Config:
     # Mã PIN đăng nhập giao diện web và API (4–12 chữ số). Để trống = không cần đăng nhập.
     PIN = os.getenv('IRHUB_PIN', '').strip()
 
-    VERSION = '1.3.0'
+    VERSION = '1.4.0'

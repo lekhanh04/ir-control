@@ -1,6 +1,6 @@
 // Hẹn giờ: chạy một ngữ cảnh hoặc một nút vào giờ cố định, các ngày chọn trong tuần (theo đồng hồ của Raspberry Pi).
 import { api } from '../api.js';
-import { $, $$, by, esc, ic, toast, dialog } from '../util.js';
+import { $, $$, by, esc, ic, toast, dialog, clock, dayLabel } from '../util.js';
 import { S, skel, loadCmds, handleErr } from '../state.js';
 import { cur, render } from '../router.js';
 
@@ -11,6 +11,17 @@ const PRESETS = [[127, 'Mọi ngày'], [31, 'Thứ 2 – Thứ 6'], [96, 'Cuối
 export function daysText(m) {
   const p = PRESETS.find(([x]) => x === m);
   return p ? p[1] : DAYS.filter((_, i) => m & (1 << i)).join(', ');
+}
+
+const LAST = { ok: 'thành công', partial: 'một phần', error: 'không thành công', skipped: 'bỏ qua (ngữ cảnh trống)' };
+function runInfo(s) {
+  const parts = [];
+  if (s.next_run) parts.push(`Lần tới: ${dayLabel(s.next_run)} ${clock(s.next_run)}`);
+  if (s.last_at) {
+    const n = s.last_total ? ` · ${s.last_ok}/${s.last_total} lệnh` : '';
+    parts.push(`<span${s.last_status === 'ok' || s.last_status === 'skipped' ? '' : ' style="color:var(--danger)"'}>Lần trước: ${dayLabel(s.last_at)} ${clock(s.last_at)}, ${LAST[s.last_status] || s.last_status}${n}</span>`);
+  }
+  return parts.length ? `<br><span class="small muted">${parts.join('<br>')}</span>` : '';
 }
 
 const title = (s) => (s.scene_id ? `Ngữ cảnh “${s.scene_name}”` : `${s.device_name} · ${s.command_label}${s.room_name ? ` (${s.room_name})` : ''}`);
@@ -33,7 +44,7 @@ export function schedulesPage(v) {
 
   const list = S.schedules.map((s) => `<section class="card"><div class="row" style="gap:12px">
       <span class="tm${s.enabled ? '' : ' muted'}">${esc(s.at_time)}</span>
-      <div class="grow"><b>${esc(title(s))}</b><br><span class="small muted">${esc(daysText(s.days))}</span>` +
+      <div class="grow"><b>${esc(title(s))}</b><br><span class="small muted">${esc(daysText(s.days))}</span>${runInfo(s)}` +
       (s.scene_id && !s.scene_steps ? '<br><span class="badge warn">Ngữ cảnh không còn bước nào, hẹn giờ sẽ tự tắt</span>' : '') + `</div>
       <button type="button" class="switch" role="switch" data-tog="${s.id}" aria-checked="${s.enabled}" aria-label="Bật hẹn giờ ${esc(s.at_time)}"></button></div>
       <div class="row"><button type="button" class="btn sm ghost" data-edit="${s.id}">${ic('pen')}Sửa</button>

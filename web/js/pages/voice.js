@@ -1,7 +1,7 @@
 // Giọng nói: module thu giọng nói → bộ trung tâm hiểu câu → phát lệnh. Kết quả đẩy lên qua SSE (sự kiện "voice").
 import { api } from '../api.js';
 import { $, $$, by, esc, ic, toast } from '../util.js';
-import { S, handleErr, roomName } from '../state.js';
+import { S, store, handleErr, roomName } from '../state.js';
 import { cur, render } from '../router.js';
 
 const SENS = { low: 'Thấp', mid: 'Vừa', high: 'Cao' };
@@ -14,7 +14,8 @@ export function paintVoice() {
   if (!vo) { el.hidden = true; return; }
   el.hidden = false;
   el.classList.toggle('on', n.state === 'listening');
-  const link = `<a class="iconbtn" href="#giong-noi" aria-label="Cài đặt giọng nói">${ic('chev')}</a>`;
+  const link = `<a class="iconbtn" href="#giong-noi" aria-label="Cài đặt giọng nói">${ic('chev')}</a>` +
+    '<button type="button" class="iconbtn sm" id="vhide" aria-label="Ẩn thẻ giọng nói">' + ic('x') + '</button>';
   let h;
   if (vo.module === 'missing') h = `<span class="vic warn">${ic('alert')}</span><div class="grow"><b>Không tìm thấy module giọng nói</b><p class="small muted">Lệnh giọng nói tạm thời không dùng được.</p></div>${link}`;
   else if (!vo.enabled) h = `<span class="vic off">${ic('mic')}</span><div class="grow"><b>Micro đang tắt</b></div><button type="button" class="btn sm" id="vtog">Bật micro</button>`;
@@ -25,6 +26,8 @@ export function paintVoice() {
   el.innerHTML = h;
   const t = $('#vtog', el);
   if (t) t.onclick = () => api('POST', '/api/voice', { enabled: true }).then((x) => { S.voice = x; paintVoice(); }, handleErr);
+  const hide = $('#vhide', el);
+  if (hide) hide.onclick = () => { store.set('hideVoice', true); toast('Đã ẩn thẻ giọng nói. Hiện lại ở Quản lý › Giọng nói'); render(); };
 }
 
 /** Sự kiện SSE: {state:'listening'} rồi {state:'result', text, ok, device_id, key, label, status} */
@@ -49,7 +52,7 @@ export function onVoice(ev) {
     : ev.scene ? (ev.status === 'partial' ? `Ngữ cảnh “${ev.scene}”: một số lệnh không thành công.` : `Ngữ cảnh “${ev.scene}”: không lệnh nào thành công.`)
       : DEVICE_MSG[ev.status] || 'Không gửi được lệnh.';
   S.vnow = { state: 'result', ok, text: ev.text, label, message };
-  if (cur().name === '') paintVoice();
+  if ($('#vc')) paintVoice();
   else toast('Giọng nói: ' + (ok ? label : message));
   S.vT = setTimeout(() => { S.vnow = { state: 'idle' }; paintVoice(); }, 7000);
 }
@@ -59,6 +62,8 @@ export function voicePage(v) {
   const vo = S.voice;
   v.innerHTML = `<section class="card"><div class="row"><span class="grow" id="l-mic"><b>Nghe lệnh giọng nói</b><br><span class="small muted">Module thu giọng nói nhận lệnh, bộ trung tâm tra mã và gửi tới bộ phát.</span></span>
       <button type="button" class="switch" role="switch" id="micsw" aria-checked="${!!vo.enabled}" aria-labelledby="l-mic"></button></div>` +
+    `<div class="row"><span class="grow" id="l-vs"><b>Hiện thẻ giọng nói trên màn chính</b><br><span class="small muted">Chỉ áp dụng cho trình duyệt này.</span></span>
+      <button type="button" class="switch" role="switch" id="vshow" aria-checked="${!store.get('hideVoice', false)}" aria-labelledby="l-vs"></button></div>` +
     (vo.module === 'missing' ? `<div class="note warn">${ic('alert')}<span>Bộ trung tâm chưa nhận được tín hiệu từ module giọng nói. Kiểm tra nguồn và kết nối MQTT của module.</span></div>` : '') + '</section>' +
     '<section class="card"><h2 class="lbl" id="l-sen">Độ nhạy</h2><div class="seg" role="group" aria-labelledby="l-sen">' +
     Object.keys(SENS).map((k) => `<button type="button" class="btn" data-sen="${k}" aria-pressed="${vo.sensitivity === k}">${SENS[k]}</button>`).join('') +
@@ -74,5 +79,6 @@ export function voicePage(v) {
   $('#micsw', v).onclick = () => save({ enabled: !vo.enabled }, vo.enabled ? 'Đã tắt micro' : 'Đã bật micro');
   $$('[data-sen]', v).forEach((b) => { b.onclick = () => save({ sensitivity: b.dataset.sen }); });
   $$('[data-def]', v).forEach((b) => { b.onclick = () => save({ default_room_id: b.dataset.def ? +b.dataset.def : null }); });
-  $('#vh', v).onclick = () => { S.histFilter = 'voice'; };
+  $('#vh', v).onclick = () => { S.histFilter = 'voice'; S.history = null; };
+  $('#vshow', v).onclick = () => { store.set('hideVoice', !store.get('hideVoice', false)); render(); };
 }

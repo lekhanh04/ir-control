@@ -110,6 +110,18 @@ Firmware ESP8266 và module giọng nói phải theo đúng topic/payload trong 
 
 Trên remote, **giữ** nút âm lượng/kênh/nhiệt độ/mũi tên để gửi lặp liên tục.
 
+### Giao diện
+- **Màn chính:** mỗi thẻ thiết bị có nút Nguồn để bật/tắt nhanh; hiện nhiệt độ ước tính và cảnh báo khi bộ phát mất kết nối. Địa chỉ `#phong-<id>` giữ phòng đang chọn.
+- **Màn hình rộng** (từ 1100 px): thiết bị bên trái, remote bên phải.
+- **Nhiệt độ điều hòa:** hồng ngoại không báo ngược, nên chạm vào số ở giữa "Nhiệt độ" để nhập mức đang đặt; sau đó mỗi lần gửi thành công Nhiệt độ +/− (web, giọng nói, ngữ cảnh, hẹn giờ) tự cộng/trừ 1.
+- **Ngữ cảnh từ màn chính** chạy sau 3 giây đếm ngược, có nút Hủy (chống chạm nhầm).
+- **Học mã:** lưu xong một nút, web hỏi luôn có học tiếp nút chuẩn kế tiếp không.
+- **Lịch sử** gom theo ngày, tải thêm từng trang, lọc Giọng nói / Tự động / Lỗi.
+- **Hẹn giờ** hiện lần chạy tới và kết quả lần chạy trước.
+- **Sắp xếp** phòng, thiết bị (Quản lý › Sắp xếp) và nút tự tạo (trong Sửa nút) — lưu ở bộ trung tâm.
+- **Nhiều điện thoại cùng mở:** máy này sửa thì máy kia tự cập nhật.
+- Lỗi hiện lâu hơn và có nút đóng; điện thoại rung nhẹ khi gửi lệnh; ẩn được thẻ giọng nói (Quản lý › Giọng nói).
+
 ## Thêm loại thiết bị hoặc nút mới
 
 - **Loại thiết bị:** thêm một dòng vào bảng `device_types`, ví dụ trong DB Browser for SQLite:
@@ -120,7 +132,7 @@ Trên remote, **giữ** nút âm lượng/kênh/nhiệt độ/mũi tên để g�
 
 ## Cơ sở dữ liệu và nâng cấp phiên bản
 
-- File CSDL: `backend/data/irhub.db`. Phiên bản lược đồ lưu trong `PRAGMA user_version` (hiện tại **4**), xem ở trang **Bộ trung tâm**.
+- File CSDL: `backend/data/irhub.db`. Phiên bản lược đồ lưu trong `PRAGMA user_version` (hiện tại **5**), xem ở trang **Bộ trung tâm**.
 - **Sao lưu tự động:** mỗi ngày một bản `backend/data/backups/irhub-YYYYMMDD.db`, giữ 7 bản (`IRHUB_BACKUP_KEEP`). Các bản này nằm cùng thẻ nhớ: cứu được khi file CSDL hỏng hay lỡ xóa nhầm, nhưng không cứu được khi hỏng cả thẻ, nên thỉnh thoảng hãy bấm **Tải bản sao lưu** ở trang **Bộ trung tâm** để cất về máy.
 - **Khôi phục:** trang **Bộ trung tâm** → chọn một bản tự động hoặc tải file `.db` lên. File được kiểm tra và nâng cấp lên cấu trúc hiện tại; dữ liệu đang dùng được tự lưu thành `irhub-truoc-khoi-phuc-<thời gian>.db` trước khi thay, nên khôi phục nhầm vẫn quay lại được.
 - **Đỡ hao thẻ nhớ:** CSDL chạy WAL với `synchronous=NORMAL`; status 30 giây/lần của bộ phát chỉ cập nhật bộ nhớ, chỉ ghi xuống thẻ khi có thay đổi (trạng thái, IP, firmware) hoặc 10 phút/lần (`SLAVE_DB_REFRESH_S`).
@@ -135,5 +147,6 @@ Trên remote, **giữ** nút âm lượng/kênh/nhiệt độ/mũi tên để g�
   - Bảng `scenes`, `scene_steps` (ngữ cảnh) và `schedules` (hẹn giờ).
   - `history.source` nhận thêm `scene`, `schedule`.
 - Phiên bản 4 so với 3: dựng lại bảng `rooms` cho đúng `schema.sql`. CSDL nâng cấp từ bản đầu tiên (v1) còn giữ bảng `rooms` cũ (thiếu kiểm tra độ dài, không so trùng hoa/thường). Tên phòng trùng được đổi thành "Tên (2)"; id phòng giữ nguyên.
+- Phiên bản 5 so với 4: thêm bảng `device_state` (nhiệt độ ước tính), `schedule_runs` (kết quả lần chạy hẹn giờ gần nhất), `ui_order` (thứ tự sắp xếp phòng/thiết bị/nút).
 - Kiểm thử `tests/test_database.py` bảo đảm CSDL nâng cấp từ bản cũ có **cấu trúc giống hệt** CSDL tạo mới.
 - Thay đổi lược đồ sau này: sửa `schema.sql`, tăng `LATEST` và thêm một bước vào `STEPS` trong `migrations.py`.

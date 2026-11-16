@@ -1,13 +1,19 @@
 // Ngữ cảnh: một lần chạm phát lần lượt nhiều nút (vd "Đi ngủ": tắt tivi, tắt điều hòa, bật quạt).
 // Gọi được từ màn chính, bằng giọng nói ("bật chế độ đi ngủ") và hẹn giờ.
 import { api } from '../api.js';
-import { $, $$, by, esc, ic, toast, dialog } from '../util.js';
+import { $, $$, by, esc, ic, toast, dialog, countdown, buzz } from '../util.js';
 import { S, skel, loadBase, loadCmds, handleErr, roomName } from '../state.js';
 import { go } from '../router.js';
 
 const DELAYS = [[0, 'không chờ'], [500, '0,5 giây'], [1000, '1 giây'], [2000, '2 giây'], [5000, '5 giây'], [10000, '10 giây'], [30000, '30 giây']];
 
 const stepText = (st) => `${st.device_name} · ${st.label}`;
+
+/** Chạm nhầm cũng không sao: đếm ngược 3 giây, có nút Hủy, rồi mới chạy */
+export function runSceneConfirm(sc, btn) {
+  if (!sc || (btn && btn.disabled)) return;
+  countdown(`Chạy “${sc.name}”`, 3, () => runScene(sc, btn));
+}
 
 /** Chạy ngữ cảnh và báo kết quả. btn: nút vừa bấm (tạm khóa trong lúc chạy) */
 export async function runScene(sc, btn) {
@@ -18,7 +24,9 @@ export async function runScene(sc, btn) {
     const wait = sc.steps.reduce((t, s) => t + 3500 + s.delay_ms, 5000);
     const r = await api('POST', `/api/scenes/${sc.id}/run`, {}, wait);
     const ok = r.results.filter((x) => x.status === 'ok').length;
-    toast(r.status === 'ok' ? `Đã chạy “${sc.name}” · ${ok} lệnh` : `“${sc.name}”: ${ok}/${r.results.length} lệnh thành công. Xem Lịch sử`);
+    buzz(r.status === 'ok');
+    if (r.status === 'ok') toast(`Đã chạy “${sc.name}” · ${ok} lệnh`);
+    else toast(`“${sc.name}”: ${ok}/${r.results.length} lệnh thành công. Xem Lịch sử`, 'err');
   } catch (e) {
     handleErr(e);
   } finally {

@@ -26,7 +26,9 @@ Thời gian (`at`, `last_seen`, `last_run`) tính bằng mili giây Unix.
 | POST | `/rooms` | `{name}` | `{id, name}` | 400 `name`, 409 `exists` |
 | PATCH | `/rooms/{id}` | `{name}` | `{id, name}` | 400, 409 `exists`, 404 |
 | DELETE | `/rooms/{id}` | — | `{ok}` | 409 `not_empty`, 404 |
-| GET | `/devices` | — | `[{id, room_id, type, name, brand, slave_id, command_count}]` | — |
+| GET | `/devices` | — | `[{id, room_id, type, name, brand, slave_id, command_count, power_command_id, temp}]` theo thứ tự sắp xếp. `power_command_id` = nút Nguồn (cho nút nhanh trên thẻ), `temp` = nhiệt độ ước tính | — |
+| PUT | `/devices/{id}/state` | `{temp: 16–30 \| null}` | `{device_id, temp}`. Sau đó mỗi lần gửi thành công `temp_up`/`temp_down` (mọi nguồn) tự cộng/trừ 1, giới hạn 16–30 | 400 `temp`, 404 |
+| PUT | `/order` | `{kind: room\|device\|command, ids: [...]}` | `{ok}`. Lưu thứ tự hiển thị (mục chưa sắp xếp nằm cuối, theo id) | 400 `invalid` |
 | POST | `/devices` | `{name, type, room_id, brand?, slave_id?}` (`room_id` phải là số nguyên) | thiết bị | 400 `invalid`, 409 `name_exists` |
 | PATCH | `/devices/{id}` | trường cần đổi | thiết bị (đổi phòng mà không gửi `slave_id` → `slave_id` về `null`) | 400, 404, 409 `name_exists` |
 | DELETE | `/devices/{id}` | — | `{ok}` (xóa kèm nút, giữ lịch sử) | 404 |
@@ -48,11 +50,11 @@ Thời gian (`at`, `last_seen`, `last_run`) tính bằng mili giây Unix.
 | PUT | `/scenes/{id}` | như POST (thay toàn bộ) | ngữ cảnh | 400, 404, 409 |
 | DELETE | `/scenes/{id}` | — | `{ok}` (xóa kèm hẹn giờ dùng nó) | 404 |
 | POST | `/scenes/{id}/run` | — | `{scene_id, name, status: ok\|partial\|error, results: [{command_id, label, device_name, status, latency_ms}]}` sau khi chạy xong mọi bước | 404 |
-| GET | `/schedules` | — | `[{id, scene_id, command_id, at_time, days, enabled, last_run, scene_steps, scene_name, command_label, device_id, device_name, room_name}]` theo giờ. `scene_steps` = số bước còn lại của ngữ cảnh; hẹn giờ của ngữ cảnh 0 bước tự tắt khi đến giờ | — |
+| GET | `/schedules` | — | `[{id, scene_id, command_id, at_time, days, enabled, last_run, scene_steps, scene_name, command_label, device_id, device_name, room_name}]` theo giờ. `scene_steps` = số bước còn lại của ngữ cảnh; hẹn giờ của ngữ cảnh 0 bước tự tắt khi đến giờ. `next_run` (ms, theo giờ Pi; `null` khi tắt), `last_at`, `last_status` (`ok\|partial\|error\|skipped`), `last_ok`, `last_total` | — |
 | POST | `/schedules` | `{scene_id \| command_id, at_time: "HH:MM", days?: 1–127, enabled?}` | hẹn giờ | 400 `invalid` |
 | PATCH | `/schedules/{id}` | trường cần đổi | hẹn giờ | 400, 404 |
 | DELETE | `/schedules/{id}` | — | `{ok}` | 404 |
-| GET | `/history` | `?limit=60` | `[{id, at, device_id, room_name, device_name, key, label, source, text, slave_id, status, latency_ms}]` mới nhất trước. `source`: `web, voice, scene, schedule` (`text` = câu nói / tên ngữ cảnh / "Hẹn giờ HH:MM"). `status`: `ok, offline, timeout, error, not_understood` (câu nói không hiểu: chỉ có `source=voice`, `text`) | — |
+| GET | `/history` | `?limit=60&filter=voice\|auto\|fail&before=<at>&before_id=<id>` (trang sau: `at`, `id` của dòng cuối trang trước) | `[{id, at, device_id, room_name, device_name, key, label, source, text, slave_id, status, latency_ms}]` mới nhất trước. `source`: `web, voice, scene, schedule` (`text` = câu nói / tên ngữ cảnh / "Hẹn giờ HH:MM"). `status`: `ok, offline, timeout, error, not_understood` (câu nói không hiểu: chỉ có `source=voice`, `text`) | — |
 | GET | `/voice` | — | `{enabled, sensitivity, default_room_id, module: ok\|missing}` | — |
 | POST | `/voice` | `{enabled?, sensitivity?, default_room_id?}` (`default_room_id`: id phòng có thật hoặc `null`) | như GET | 400 `sensitivity`, 400 `default_room` |
 
@@ -72,7 +74,9 @@ Mã nút chuẩn (`key`): `power, source, temp_up, temp_down, mode, fan_speed, s
 |---|---|---|
 | `slave` | một bộ phát (như `/slaves`) | bộ phát kết nối, mất kết nối, gửi status |
 | `history` | một dòng lịch sử | sau mỗi lệnh gửi (web hoặc giọng nói) và mỗi câu nói không hiểu |
-| `voice` | `{state:"listening"}` hoặc `{state:"result", text, ok, device_id?, key?, label?, status?}` | module giọng nói nghe / có kết quả |
+| `voice` | `{state:"listening"}` hoặc `{state:"result", text, ok, device_id?, key?, label?, scene?, status?}` | module giọng nói nghe / có kết quả |
+| `device_state` | `{device_id, temp}` | nhiệt độ ước tính đổi |
+| `changed` | `{path, client}` | một máy vừa đổi cấu hình (POST/PUT/PATCH/DELETE thành công, trừ gửi lệnh, chạy ngữ cảnh, học mã). `client` = header `X-Client-Id` của máy đó, để nó tự bỏ qua |
 
 ## Chỉ có ở chế độ giả lập (`IRHUB_SIMULATE=1`)
 

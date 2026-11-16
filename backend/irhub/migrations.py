@@ -7,6 +7,7 @@ Phiên bản cấu trúc lưu trong PRAGMA user_version:
     3    ngữ cảnh (scenes, scene_steps), hẹn giờ (schedules), history.source thêm 'scene', 'schedule'
     4    dựng lại bảng rooms theo đúng schema.sql (CSDL nâng cấp từ v1 còn giữ bảng rooms cũ:
          thiếu CHECK độ dài, UNIQUE không NOCASE)
+    5    bảng device_state (nhiệt độ ước tính), schedule_runs (kết quả hẹn giờ), ui_order (thứ tự sắp xếp)
 
 Quy trình khi đổi cấu trúc về sau:
     1. Sửa schema.sql cho đúng cấu trúc mới (dùng khi tạo CSDL mới).
@@ -19,7 +20,7 @@ import re
 import sqlite3
 import time
 
-LATEST = 4
+LATEST = 5
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
 
 
@@ -142,7 +143,12 @@ def _v3_to_v4(c, json_ok, log):
         c.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'rooms'", (seq[0],))
 
 
-STEPS = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4}
+def _v4_to_v5(c, json_ok, log):
+    for s in schema_statements(json_ok):     # chỉ thêm bảng mới (CREATE ... IF NOT EXISTS)
+        c.execute(s)
+
+
+STEPS = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4, 4: _v4_to_v5}
 
 
 def migrate(path, log=print):

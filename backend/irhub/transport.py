@@ -134,7 +134,10 @@ class SimTransport:
             time.sleep(30)
             for sid, online in list(self.online.items()):
                 if online:
-                    self.hub.on_slave_status(sid, {'online': True})
+                    try:
+                        self.hub.on_slave_status(sid, {'online': True})
+                    except Exception as e:      # như bản thật: lỗi một lần không được dừng hẳn luồng
+                        print('[Giả lập] Lỗi gửi status:', e)
 
     def healthy(self):
         return True

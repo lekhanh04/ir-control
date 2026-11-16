@@ -1,7 +1,8 @@
 // Học mã IR: bấm nút trên remote nhiều lần vào mắt thu của Pi → so sánh → phát thử qua ESP8266 → lưu.
 import { api } from '../api.js';
 import { $, esc, ic, toast, say, dialog } from '../util.js';
-import { S, loadBase, handleErr, roomName, slaveForDevice } from '../state.js';
+import { S, loadBase, loadCmds, handleErr, roomName, slaveForDevice, typeInfo } from '../state.js';
+import { KEY_LABEL } from '../types.js';
 import { cur, go, render, setHeader } from '../router.js';
 
 let L = null;   // phiên học đang mở trên giao diện
@@ -127,16 +128,33 @@ async function beginCapture() {
   }
 }
 
+/** Nút chuẩn tiếp theo (theo bố cục remote) chưa có mã, tính từ sau nút vừa học */
+async function offerNext(d, savedKey, savedLabel) {
+  let cmds;
+  try { cmds = await loadCmds(d.id); } catch (e) { toast(`Đã lưu nút “${savedLabel}”`); return; }
+  const have = new Set(cmds.map((c) => c.key));
+  const order = typeInfo(d.type).groups.flatMap((g) => g.keys);
+  const start = order.indexOf(savedKey) + 1;
+  const next = [...order.slice(start), ...order.slice(0, Math.max(0, start - 1))].find((k) => !have.has(k));
+  if (!next) { toast(`Đã lưu nút “${savedLabel}”. Remote đã đủ các nút chuẩn`); return; }
+  dialog({
+    title: `Đã lưu nút “${savedLabel}”`,
+    body: `Học tiếp nút <b>${esc(KEY_LABEL[next] || next)}</b>? Còn ${order.filter((k) => !have.has(k)).length} nút chuẩn chưa học.`,
+    actions: [{ label: 'Xong' }, { label: `Học “${KEY_LABEL[next] || next}”`, pri: true, run: () => startLearnFor(d, next, KEY_LABEL[next] || next, false) }],
+  });
+}
+
 async function saveLearn(replace) {
   const d = L.device;
   try {
     await api('POST', `/api/learn/${L.session}/save`, { label: L.label, replace: replace || undefined });
-    toast(`Đã lưu nút “${L.label}”`);
+    const savedKey = L.key, savedLabel = L.label;
     delete S.cmds[d.id];
     S.edit = true;
     L = null;
     await loadBase();
     go('tb-' + d.id);
+    offerNext(d, savedKey, savedLabel);
   } catch (e) {
     if (e.code === 'exists' && !replace) {
       dialog({ title: 'Nút đã có mã', body: `Thay mã cũ của “${esc(L.label)}” bằng mã vừa học?`, actions: [{ label: 'Hủy' }, { label: 'Thay mã', pri: true, run: () => saveLearn(true) }] });

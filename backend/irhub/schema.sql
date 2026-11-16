@@ -1,4 +1,4 @@
--- Cơ sở dữ liệu SQLite của bộ trung tâm (Raspberry Pi 4B) – phiên bản cấu trúc 4
+-- Cơ sở dữ liệu SQLite của bộ trung tâm (Raspberry Pi 4B) – phiên bản cấu trúc 5
 -- Phòng → Thiết bị → Lệnh (mã IR); bộ phát ESP8266 theo phòng; ngữ cảnh, hẹn giờ; lịch sử điều khiển.
 -- Thời gian *_at, last_seen tính bằng mili giây Unix (UTC).
 --
@@ -126,6 +126,31 @@ CREATE TABLE IF NOT EXISTS schedules (
   last_run    INTEGER,
   created_at  INTEGER NOT NULL,
   CHECK ((scene_id IS NULL) <> (command_id IS NULL))
+);
+
+-- Trạng thái ước tính của thiết bị (IR không báo ngược): nhiệt độ điều hòa đã đặt.
+-- Tự tăng/giảm khi gửi thành công nút temp_up / temp_down; người dùng chỉnh lại được khi lệch.
+CREATE TABLE IF NOT EXISTS device_state (
+  device_id   INTEGER PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+  temp        INTEGER CHECK (temp IS NULL OR temp BETWEEN 16 AND 30),
+  updated_at  INTEGER NOT NULL
+);
+
+-- Kết quả lần chạy gần nhất của mỗi hẹn giờ.
+CREATE TABLE IF NOT EXISTS schedule_runs (
+  schedule_id INTEGER PRIMARY KEY REFERENCES schedules(id) ON DELETE CASCADE,
+  at          INTEGER NOT NULL,
+  status      TEXT    NOT NULL CHECK (status IN ('ok', 'partial', 'error', 'skipped')),
+  ok          INTEGER NOT NULL DEFAULT 0,
+  total       INTEGER NOT NULL DEFAULT 0
+);
+
+-- Thứ tự hiển thị do người dùng sắp xếp (phòng, thiết bị, nút tự tạo). Không có dòng = xếp theo id.
+CREATE TABLE IF NOT EXISTS ui_order (
+  kind        TEXT    NOT NULL CHECK (kind IN ('room', 'device', 'command')),
+  item_id     INTEGER NOT NULL,
+  pos         INTEGER NOT NULL,
+  PRIMARY KEY (kind, item_id)
 );
 
 -- Cài đặt dạng khóa–giá trị

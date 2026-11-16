@@ -17,7 +17,8 @@ export const S = {
   auth: null,          // GET /api/auth: {required, ok}
   types: null,         // GET /api/device-types: [{code, label}] theo thứ tự hiển thị
   cmds: {},            // device_id → danh sách nút
-  history: null, histFilter: 'all',
+  history: null, histFilter: 'all', histMore: false,
+  sortMode: false,     // trang Quản lý đang ở chế độ sắp xếp
   voice: null, vnow: { state: 'idle' }, vT: null,
   room: store.get('room', null),   // phòng đang chọn (nhớ theo trình duyệt)
   edit: false,         // chế độ "Sửa nút" trên remote
@@ -48,8 +49,8 @@ export async function loadCmds(id) {
 export function handleErr(e) {
   if (e.code === 'auth') return;   // hộp nhập mã PIN đã hiện
   if (e.status === 429 || e.code === 'busy') return toast('Hệ thống đang bận, thử lại sau 1 giây');
-  if (e.status === 0) { S.hooks.poll(); return toast('Không kết nối được bộ trung tâm'); }
-  toast(e.message || 'Có lỗi xảy ra');
+  if (e.status === 0) { S.hooks.poll(); return toast('Không kết nối được bộ trung tâm', 'err'); }
+  toast(e.message || 'Có lỗi xảy ra', 'err');
 }
 
 /** Khung chờ trong lúc tải; trang sẽ tự vẽ lại khi loadBase() xong */
@@ -91,7 +92,8 @@ export function slaveForDevice(d) {
 }
 
 const lineOk = (style, text) => `<p class="slave" style="${style}"><span class="dot ok"></span>${text}</p>`;
-const lineBad = (style, text) => `<p class="slave" style="color:var(--danger);${style}"><span class="dot bad"></span>${text}</p>`;
+const recheck = '<button type="button" class="linkbtn" data-recheck>Kiểm tra lại</button>';
+const lineBad = (style, text) => `<p class="slave" style="color:var(--danger);${style}"><span class="dot bad"></span><span>${text} · ${recheck}</span></p>`;
 const lineNone = (style) => `<p class="slave" style="${style}"><span class="dot warn"></span>Phòng này chưa có bộ phát. <a href="#bo-phat">Gán bộ phát</a></p>`;
 
 /** Dòng tóm tắt bộ phát ESP8266 của một phòng (có thể nhiều bộ) */
@@ -106,7 +108,7 @@ export function slaveLine(roomId, style = '') {
   if (on === list.length) return lineOk(style, `${list.length} bộ phát · tất cả đang hoạt động`);
   if (!on) return lineBad(style, `${list.length} bộ phát · tất cả mất kết nối`);
   const off = list.filter((s) => !s.online).map((s) => esc(s.name)).join(', ');
-  return `<p class="slave" style="${style}"><span class="dot warn"></span>${on}/${list.length} bộ phát hoạt động · ${off} mất kết nối</p>`;
+  return `<p class="slave" style="${style}"><span class="dot warn"></span><span>${on}/${list.length} bộ phát hoạt động · ${off} mất kết nối · ${recheck}</span></p>`;
 }
 
 /** Dòng trạng thái bộ phát mà một thiết bị sẽ dùng */

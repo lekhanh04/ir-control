@@ -50,6 +50,20 @@ def text(v, lo, hi):
     return v if lo <= len(v) <= hi else None
 
 
+# Báo cho các trình duyệt khác đang mở rằng dữ liệu vừa đổi (thêm phòng, sửa thiết bị, ngữ cảnh…) để chúng tự tải lại.
+# Gửi lệnh, đăng nhập, học mã (trừ lúc lưu), chạy ngữ cảnh không làm đổi cấu hình nên không báo.
+QUIET_PREFIXES = ('/api/send', '/api/login', '/api/logout', '/api/dev/')
+
+
+@bp.after_request
+def _notify_change(resp):
+    p = request.path
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and resp.status_code < 400 and not p.startswith(QUIET_PREFIXES) \
+            and not p.endswith('/run') and not (p.startswith('/api/learn') and not p.endswith('/save')) and not p.endswith('/identify'):
+        hub().events.publish('changed', {'path': p, 'client': request.headers.get('X-Client-Id')})
+    return resp
+
+
 @bp.errorhandler(sqlite3.IntegrityError)
 def _integrity(e):
     return err(409, 'conflict', 'Dữ liệu bị trùng hoặc đang được dùng')
@@ -181,7 +195,8 @@ def device_types():
 # ---------- Phòng ----------
 @bp.get('/rooms')
 def rooms_list():
-    return jsonify(hub().db.all('SELECT id, name FROM rooms ORDER BY id'))
+    return jsonify(hub().db.all("SELECT r.id, r.name FROM rooms r LEFT JOIN ui_order o ON o.kind = 'room' AND o.item_id = r.id "
+                                'ORDER BY o.pos IS NULL, o.pos, r.id'))
 
 
 @bp.post('/rooms')
@@ -214,6 +229,7 @@ def rooms_delete(rid):
     if db.one('SELECT id FROM devices WHERE room_id = ? LIMIT 1', (rid,)):
         return err(409, 'not_empty', 'Phòng còn thiết bị')
     _, n = db.run('DELETE FROM rooms WHERE id = ?', (rid,))
+    db.run("DELETE FROM ui_order WHERE kind = 'room' AND item_id = ?", (rid,))
     if n and db.get_setting('voice.default_room_id') == str(rid):
         db.set_setting('voice.default_room_id', '')    # phòng mặc định của giọng nói không còn
     return jsonify(ok=True) if n else err(404, 'not_found', 'Không tìm thấy phòng')
@@ -223,8 +239,44 @@ def rooms_delete(rid):
 @bp.get('/devices')
 def devices_list():
     return jsonify(hub().db.all('SELECT d.id, d.room_id, d.type, d.name, d.brand, d.slave_id, '
-                                '(SELECT COUNT(*) FROM commands c WHERE c.device_id = d.id) AS command_count '
-                                'FROM devices d ORDER BY d.room_id, d.id'))
+                                '(SELECT COUNT(*) FROM commands c WHERE c.device_id = d.id) AS command_count, '
+                                "(SELECT id FROM commands c WHERE c.device_id = d.id AND c.key = 'power') AS power_command_id, "
+                                '(SELECT temp FROM device_state s WHERE s.device_id = d.id) AS temp '
+                                "FROM devices d LEFT JOIN ui_order o ON o.kind = 'device' AND o.item_id = d.id "
+                                'ORDER BY d.room_id, o.pos IS NULL, o.pos, d.id'))
+
+
+@bp.put('/devices/<int:did>/state')
+def devices_state(did):
+    """Đặt lại nhiệt độ ước tính {temp: 16–30 | null}. Sau đó mỗi lần gửi thành công Nhiệt độ +/− sẽ tự cộng/trừ 1."""
+    if not hub().db.one('SELECT id FROM devices WHERE id = ?', (did,)):
+        return err(404, 'not_found', 'Không tìm thấy thiết bị')
+    t = body().get('temp')
+    if t is not None and not (is_int(t) and 16 <= t <= 30):
+        return err(400, 'temp', 'Nhiệt độ từ 16 đến 30 °C')
+    hub().set_temp(did, t)
+    return jsonify(device_id=did, temp=t)
+
+
+@bp.put('/order')
+def set_order():
+    """Sắp xếp {kind: room|device|command, ids: [...]} theo thứ tự mới."""
+    b, db = body(), hub().db
+    table = {'room': 'rooms', 'device': 'devices', 'command': 'commands'}.get(b.get('kind'))
+    ids = b.get('ids')
+    if not table or not isinstance(ids, list) or not ids or len(ids) > 500 or not all(is_int(i) for i in ids) or len(set(ids)) != len(ids):
+        return err(400, 'invalid', 'Dữ liệu sắp xếp không hợp lệ')
+    found = db.all('SELECT id FROM %s WHERE id IN (%s)' % (table, ','.join('?' * len(ids))), tuple(ids))
+    if len(found) != len(ids):
+        return err(400, 'invalid', 'Có mục không tồn tại')
+    c = db.connect()
+    try:
+        with c:
+            c.executemany('INSERT OR REPLACE INTO ui_order (kind, item_id, pos) VALUES (?, ?, ?)',
+                          [(b['kind'], i, pos) for pos, i in enumerate(ids)])
+    finally:
+        c.close()
+    return jsonify(ok=True)
 
 
 def _device_body(b, partial=False, current=None):
@@ -294,14 +346,17 @@ def devices_update(did):
 @bp.delete('/devices/<int:did>')
 def devices_delete(did):
     _, n = hub().db.run('DELETE FROM devices WHERE id = ?', (did,))
+    hub().db.run("DELETE FROM ui_order WHERE (kind = 'device' AND item_id = ?) OR "
+                 "(kind = 'command' AND item_id NOT IN (SELECT id FROM commands))", (did,))
     return jsonify(ok=True) if n else err(404, 'not_found', 'Không tìm thấy thiết bị')
 
 
 # ---------- Lệnh (nút) ----------
 @bp.get('/devices/<int:did>/commands')
 def commands_list(did):
-    rows = hub().db.all('SELECT id, device_id, key, label, kind, protocol, value, address, command, bits, carrier_khz, raw, match_pct '
-                        'FROM commands WHERE device_id = ? ORDER BY id', (did,))
+    rows = hub().db.all('SELECT c.id, c.device_id, c.key, c.label, c.kind, c.protocol, c.value, c.address, c.command, c.bits, '
+                        "c.carrier_khz, c.raw, c.match_pct FROM commands c LEFT JOIN ui_order o ON o.kind = 'command' AND o.item_id = c.id "
+                        'WHERE c.device_id = ? ORDER BY o.pos IS NULL, o.pos, c.id', (did,))
     for r in rows:
         r['raw_len'] = len(json.loads(r.pop('raw'))) if r.get('raw') else None
     return jsonify(rows)
@@ -325,6 +380,7 @@ def commands_update(cid):
 @bp.delete('/commands/<int:cid>')
 def commands_delete(cid):
     _, n = hub().db.run('DELETE FROM commands WHERE id = ?', (cid,))
+    hub().db.run("DELETE FROM ui_order WHERE kind = 'command' AND item_id = ?", (cid,))
     return jsonify(ok=True) if n else err(404, 'not_found', 'Không tìm thấy nút')
 
 
@@ -499,12 +555,15 @@ def _schedules(sched_id=None):
     where, args = ('WHERE s.id = ?', (sched_id,)) if sched_id else ('', ())
     rows = hub().db.all('SELECT s.id, s.scene_id, s.command_id, s.at_time, s.days, s.enabled, s.last_run, '
                         '(SELECT COUNT(*) FROM scene_steps st WHERE st.scene_id = s.scene_id) AS scene_steps, '
-                        'sc.name AS scene_name, c.label AS command_label, c.device_id, d.name AS device_name, r.name AS room_name '
+                        'sc.name AS scene_name, c.label AS command_label, c.device_id, d.name AS device_name, r.name AS room_name, '
+                        'sr.at AS last_at, sr.status AS last_status, sr.ok AS last_ok, sr.total AS last_total '
                         'FROM schedules s LEFT JOIN scenes sc ON sc.id = s.scene_id LEFT JOIN commands c ON c.id = s.command_id '
                         'LEFT JOIN devices d ON d.id = c.device_id LEFT JOIN rooms r ON r.id = d.room_id '
+                        'LEFT JOIN schedule_runs sr ON sr.schedule_id = s.id '
                         '%s ORDER BY s.at_time, s.id' % where, args)
     for r in rows:
         r['enabled'] = bool(r['enabled'])
+        r['next_run'] = hub().next_run(r['at_time'], r['days'], r['enabled'])
     return rows
 
 
@@ -621,10 +680,23 @@ def slaves_identify(sid):
 
 
 # ---------- Lịch sử, giọng nói ----------
+HISTORY_FILTERS = {'voice': "source = 'voice'", 'auto': "source IN ('scene', 'schedule')", 'fail': "status <> 'ok'"}
+
+
 @bp.get('/history')
 def history_list():
-    limit = min(max(request.args.get('limit', 60, type=int), 1), 500)
-    return jsonify(hub().db.all('SELECT * FROM history ORDER BY at DESC LIMIT ?', (limit,)))
+    """Mới nhất trước. Trang sau: ?before=<at>&before_id=<id> của dòng cuối trang trước. ?filter=voice|auto|fail"""
+    a = request.args
+    limit = min(max(a.get('limit', 60, type=int), 1), 500)
+    where, args = [], []
+    if a.get('filter') in HISTORY_FILTERS:
+        where.append(HISTORY_FILTERS[a['filter']])
+    before = a.get('before', type=int)
+    if before is not None:
+        where.append('(at < ? OR (at = ? AND id < ?))')
+        args += [before, before, a.get('before_id', 2 ** 62, type=int)]
+    sql = 'SELECT * FROM history %s ORDER BY at DESC, id DESC LIMIT ?' % ('WHERE ' + ' AND '.join(where) if where else '')
+    return jsonify(hub().db.all(sql, tuple(args) + (limit,)))
 
 
 @bp.get('/voice')

@@ -11,6 +11,8 @@ from .learn import LearnManager
 from .voice import VoiceService
 
 SLAVE_ID_RE = re.compile(r'^[A-Za-z0-9_-]{1,32}$')
+TEMP_MIN, TEMP_MAX = 16, 30
+TEMP_STEP = {'temp_up': 1, 'temp_down': -1}
 
 
 def public_slave(row):
@@ -270,6 +272,7 @@ class Hub:
             if sc['scene_id'] and not self.db.one('SELECT 1 FROM scene_steps WHERE scene_id = ? LIMIT 1', (sc['scene_id'],)):
                 # Ngữ cảnh mất hết bước (thiết bị/nút đã bị xóa): tắt hẹn giờ thay vì mỗi ngày chạy mà không làm gì
                 self.db.run('UPDATE schedules SET enabled = 0, last_run = ? WHERE id = ?', (int(now * 1000), sc['id']))
+                self._record_run(sc['id'], 'skipped', 0, 0)
                 print('[Hẹn giờ] Tắt hẹn giờ %s lúc %s: ngữ cảnh không còn bước nào' % (sc['id'], sc['at_time']))
                 continue
             self.db.run('UPDATE schedules SET last_run = ? WHERE id = ?', (int(now * 1000), sc['id']))
@@ -280,9 +283,49 @@ class Hub:
     def _run_schedule(self, sc):
         text = 'Hẹn giờ %s' % sc['at_time']
         if sc['scene_id']:
-            self.run_scene(sc['scene_id'], source='schedule', text=text)
+            res = self.run_scene(sc['scene_id'], source='schedule', text=text)
+            ok = sum(1 for r in res['results'] if r['status'] == 'ok') if res else 0
+            self._record_run(sc['id'], res['status'] if res else 'error', ok, len(res['results']) if res else 0)
         else:
-            self.send_command(sc['command_id'], source='schedule', text=text)
+            res = self.send_command(sc['command_id'], source='schedule', text=text)
+            good = bool(res) and res[0] == 'ok'
+            self._record_run(sc['id'], 'ok' if good else 'error', 1 if good else 0, 1)
+
+    def _record_run(self, schedule_id, status, ok, total):
+        try:
+            self.db.run('INSERT OR REPLACE INTO schedule_runs (schedule_id, at, status, ok, total) VALUES (?, ?, ?, ?, ?)',
+                        (schedule_id, now_ms(), status, ok, total))
+        except Exception as e:      # hẹn giờ có thể vừa bị xóa
+            print('[Hẹn giờ] Không ghi được kết quả:', e)
+
+    @staticmethod
+    def next_run(at_time, days, enabled, now=None):
+        """Thời điểm (ms) chạy kế tiếp theo giờ địa phương của Pi, hoặc None nếu đang tắt."""
+        if not enabled:
+            return None
+        now = now or time.time()
+        hh, mm = (int(x) for x in at_time.split(':'))
+        lt = time.localtime(now)
+        for d in range(8):
+            t = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + d, hh, mm, 0, 0, 0, -1))
+            if t > now and days & (1 << time.localtime(t).tm_wday):
+                return int(t * 1000)
+        return None
+
+    # ---------- Nhiệt độ ước tính ----------
+    def set_temp(self, device_id, temp):
+        if temp is None:
+            self.db.run('DELETE FROM device_state WHERE device_id = ?', (device_id,))
+        else:
+            self.db.run('INSERT INTO device_state (device_id, temp, updated_at) VALUES (?, ?, ?) '
+                        'ON CONFLICT(device_id) DO UPDATE SET temp = excluded.temp, updated_at = excluded.updated_at',
+                        (device_id, temp, now_ms()))
+        self.events.publish('device_state', {'device_id': device_id, 'temp': temp})
+
+    def _bump_temp(self, device_id, key):
+        st = self.db.one('SELECT temp FROM device_state WHERE device_id = ?', (device_id,))
+        if st and st['temp'] is not None:
+            self.set_temp(device_id, max(TEMP_MIN, min(TEMP_MAX, st['temp'] + TEMP_STEP[key])))
 
     def send_command(self, command_id, source='web', text=None):
         """Tra mã → gửi qua MQTT → chờ ACK → ghi lịch sử. Trả (status, latency_ms, entry) hoặc None."""
@@ -300,4 +343,6 @@ class Hub:
         entry['id'], _ = self.db.run('INSERT INTO history (at, device_id, room_name, device_name, key, label, source, text, slave_id, status, latency_ms) '
                                      'VALUES (:at, :device_id, :room_name, :device_name, :key, :label, :source, :text, :slave_id, :status, :latency_ms)', entry)
         self.events.publish('history', entry)
+        if status == 'ok' and cmd['key'] in TEMP_STEP:
+            self._bump_temp(cmd['device_id'], cmd['key'])
         return status, ms, entry

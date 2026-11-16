@@ -1,6 +1,8 @@
 // Gọi REST API của bộ trung tâm (cùng địa chỉ với trang web). Danh sách API: docs/api.md
 
 let authHook = null;
+/** Mã riêng của tab này: backend gửi kèm trong sự kiện "changed" để tab tự bỏ qua thay đổi do chính nó tạo ra */
+export const CLIENT_ID = Math.random().toString(36).slice(2, 10);
 /** main.js đăng ký: được gọi khi bộ trung tâm yêu cầu nhập mã PIN (401 "auth") */
 export function onAuthRequired(fn) { authHook = fn; }
 
@@ -14,7 +16,7 @@ export async function api(method, path, body, timeoutMs = 5000) {
   try {
     r = await fetch(path, {
       method,
-      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      headers: body === undefined ? { 'X-Client-Id': CLIENT_ID } : { 'Content-Type': 'application/json', 'X-Client-Id': CLIENT_ID },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: ctl.signal,
       cache: 'no-store',
