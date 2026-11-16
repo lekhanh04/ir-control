@@ -1,0 +1,59 @@
+"""Truy cập SQLite. Mỗi lệnh mở một kết nối riêng nên dùng an toàn từ nhiều luồng."""
+import os
+import sqlite3
+import time
+
+from . import migrations
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+class Database:
+    def __init__(self, path):
+        self.path = path
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        self.version = migrations.migrate(path)   # tạo mới hoặc nâng cấp cấu trúc
+
+    def connect(self):
+        c = sqlite3.connect(self.path, timeout=5)
+        c.row_factory = sqlite3.Row
+        c.execute('PRAGMA foreign_keys = ON')
+        return c
+
+    def all(self, sql, args=()):
+        c = self.connect()
+        try:
+            return [dict(r) for r in c.execute(sql, args).fetchall()]
+        finally:
+            c.close()
+
+    def one(self, sql, args=()):
+        rows = self.all(sql, args)
+        return rows[0] if rows else None
+
+    def run(self, sql, args=()):
+        """Chạy INSERT/UPDATE/DELETE, trả (lastrowid, rowcount)."""
+        c = self.connect()
+        try:
+            cur = c.execute(sql, args)
+            c.commit()
+            return cur.lastrowid, cur.rowcount
+        finally:
+            c.close()
+
+    def get_setting(self, key, default=None):
+        r = self.one('SELECT value FROM settings WHERE key = ?', (key,))
+        return r['value'] if r else default
+
+    def set_setting(self, key, value):
+        self.run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', (key, str(value)))
+
+    def backup_to(self, dest_path):
+        src, dst = self.connect(), sqlite3.connect(dest_path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()

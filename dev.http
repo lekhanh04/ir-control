@@ -1,0 +1,104 @@
+# Gọi thử API trong VS Code: cài extension "REST Client" (humao.rest-client), bấm "Send Request" trên mỗi khối.
+# Các mục /api/dev/* chỉ có khi backend chạy giả lập (IRHUB_SIMULATE=1).
+
+@host = http://localhost:8000
+
+### Trạng thái bộ trung tâm
+GET {{host}}/api/system
+
+### Danh sách phòng, thiết bị, bộ phát
+GET {{host}}/api/rooms
+
+###
+GET {{host}}/api/devices
+
+###
+GET {{host}}/api/slaves
+
+### Nút của tivi phòng khách (dữ liệu mẫu id = 2)
+GET {{host}}/api/devices/2/commands
+
+### Gửi một lệnh (đổi command_id theo kết quả ở trên)
+POST {{host}}/api/send
+Content-Type: application/json
+
+{"command_id": 8}
+
+### Lịch sử
+GET {{host}}/api/history?limit=20
+
+### --- Giả lập: module giọng nói nghe được một câu (giao diện cập nhật ngay) ---
+POST {{host}}/api/dev/voice
+Content-Type: application/json
+
+{"text": "Tăng âm lượng tivi phòng khách"}
+
+###
+POST {{host}}/api/dev/voice
+Content-Type: application/json
+
+{"text": "Tắt máy chiếu phòng họp"}
+
+### --- Giả lập: bộ phát phòng khách mất kết nối / có lại ---
+POST {{host}}/api/dev/slaves/esp-a1f3
+Content-Type: application/json
+
+{"online": false}
+
+###
+POST {{host}}/api/dev/slaves/esp-a1f3
+Content-Type: application/json
+
+{"online": true}
+
+### --- Giả lập: lần học mã sau không khớp / không có tín hiệu; bộ phát không gửi ACK ---
+POST {{host}}/api/dev/sim
+Content-Type: application/json
+
+{"ir": "mismatch", "ack": "ok"}
+
+###
+POST {{host}}/api/dev/sim
+Content-Type: application/json
+
+{"ir": "ok", "ack": "fail"}
+
+### Trở lại bình thường
+POST {{host}}/api/dev/sim
+Content-Type: application/json
+
+{"ir": "ok", "ack": "ok", "voice_module": true}
+
+### --- CSDL phiên bản 2 ---
+### Loại thiết bị (bảng device_types)
+GET {{host}}/api/device-types
+
+### Thời gian lưu lịch sử
+GET {{host}}/api/settings
+
+###
+PATCH {{host}}/api/settings
+Content-Type: application/json
+
+{"history_retention_days": 30}
+
+### Gán thêm bộ phát esp-0d44 vào phòng 1 (một phòng nhiều bộ phát)
+PATCH {{host}}/api/slaves/esp-0d44
+Content-Type: application/json
+
+{"room_id": 1}
+
+### Thiết bị 1 phát riêng qua esp-0d44 (null = tự chọn)
+PATCH {{host}}/api/devices/1
+Content-Type: application/json
+
+{"slave_id": "esp-0d44"}
+
+### Xóa bộ phát đang mất kết nối
+DELETE {{host}}/api/slaves/esp-91be
+
+### Câu nói không hiểu → lịch sử not_understood
+POST {{host}}/api/dev/voice
+Content-Type: application/json
+
+{"text": "hát một bài đi"}

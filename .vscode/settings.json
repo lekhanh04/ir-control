@@ -1,0 +1,13 @@
+{
+  "python.analysis.extraPaths": ["${workspaceFolder}/backend"],
+  "files.encoding": "utf8",
+  "files.eol": "\n",
+  "files.exclude": {
+    "**/__pycache__": true,
+    "backend/.venv": true
+  },
+  "[javascript]": { "editor.tabSize": 2 },
+  "[css]": { "editor.tabSize": 2 },
+  "[html]": { "editor.tabSize": 2 },
+  "[python]": { "editor.tabSize": 4 }
+}

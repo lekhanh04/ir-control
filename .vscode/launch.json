@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend (giả lập)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/app.py",
+      "cwd": "${workspaceFolder}/backend",
+      "env": { "IRHUB_SIMULATE": "1" },
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Backend (MQTT thật)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/app.py",
+      "cwd": "${workspaceFolder}/backend",
+      "env": { "IRHUB_SIMULATE": "0", "IRHUB_SEED_DEMO": "0" },
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "ESP8266 giả (MQTT)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/tools/fake_esp.py",
+      "args": ["esp-test01"],
+      "cwd": "${workspaceFolder}/backend",
+      "console": "integratedTerminal"
+    }
+  ]
+}

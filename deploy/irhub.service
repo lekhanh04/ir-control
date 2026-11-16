@@ -1,0 +1,21 @@
+# Chạy bộ trung tâm tự động khi Raspberry Pi khởi động.
+# sudo cp deploy/irhub.service /etc/systemd/system/ && sudo systemctl enable --now irhub
+# Xem log: journalctl -u irhub -f
+# Sửa User và đường dẫn nếu tài khoản trên Pi không phải "pi".
+
+[Unit]
+Description=Bo trung tam dieu khien IR
+After=network-online.target mosquitto.service pigpiod.service
+Wants=network-online.target mosquitto.service pigpiod.service
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/ir-control/backend
+Environment=IRHUB_SIMULATE=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/pi/ir-control/backend/.venv/bin/python app.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
