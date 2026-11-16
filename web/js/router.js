@@ -5,10 +5,10 @@ import { S } from './state.js';
 /** name → { title, back?, page(v, id) }  (main.js đăng ký) */
 export const routes = {};
 
-/** Đọc hash hiện tại. Trang có id: #tb-12 (remote), #sua-tb-12 (sửa thiết bị) */
+/** Đọc hash hiện tại. Trang có id: #tb-12 (remote), #sua-tb-12 (sửa thiết bị), #sua-nc-3 (sửa ngữ cảnh) */
 export function cur() {
   const h = location.hash.slice(1);
-  const m = h.match(/^(tb|sua-tb)-(\d+)$/);
+  const m = h.match(/^(tb|sua-tb|sua-nc)-(\d+)$/);
   if (m) return { name: m[1], id: +m[2] };
   return { name: routes[h] ? h : '' };
 }

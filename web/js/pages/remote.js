@@ -64,8 +64,13 @@ export function remotePage(v, id) {
   paintFb();
 
   $$('[data-cmd]', v).forEach((b) => {
+    const c = cmds.find(by('id', +b.dataset.cmd));
     if (offline) b.setAttribute('aria-disabled', 'true');
-    b.onclick = () => (offline ? toast('Bộ phát của thiết bị này đang mất kết nối') : send(b, +b.dataset.cmd, d));
+    b.onclick = () => {
+      if (b._skipClick) { b._skipClick = false; return; }   // vừa nhả tay sau khi giữ để lặp
+      if (offline) toast('Bộ phát của thiết bị này đang mất kết nối'); else send(b, c.id, d);
+    };
+    if (!offline && REPEAT.has(c.key)) holdToRepeat(b, c.id, d);
   });
   $$('[data-learn]', v).forEach((b) => { b.onclick = () => startLearnFor(d, b.dataset.learn, KEY_LABEL[b.dataset.learn], false); });
   $$('[data-manage]', v).forEach((b) => { b.onclick = () => manageKey(d, cmds.find(by('id', +b.dataset.manage))); });
@@ -103,6 +108,26 @@ function manageKey(d, c) {
   ] });
 }
 
+// ----- Giữ nút để lặp: sau 0,5 giây gửi liên tục (chờ ACK lệnh trước rồi mới gửi lệnh sau) -----
+const REPEAT = new Set(['vol_up', 'vol_down', 'ch_up', 'ch_down', 'temp_up', 'temp_down', 'up', 'down', 'left', 'right']);
+
+function holdToRepeat(b, cmdId, d) {
+  let held = false, timer = null;
+  const stop = () => { held = false; clearTimeout(timer); };
+  b.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    held = true;
+    timer = setTimeout(async function loop() {
+      if (!held || !b.isConnected) return;
+      b._skipClick = true;          // nhả tay không gửi thêm một lần nữa
+      await send(b, cmdId, d, true);
+      if (held) timer = setTimeout(loop, 120);
+    }, 500);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => b.addEventListener(ev, stop));
+  b.addEventListener('contextmenu', (e) => e.preventDefault());   // giữ lâu trên điện thoại không hiện menu
+}
+
 // ----- Gửi lệnh: Pi tra mã → MQTT → ESP8266 phát → ACK. Phản hồi hiển thị theo ACK thật. -----
 function locked(btn) {
   const n = Date.now();
@@ -133,8 +158,8 @@ const SEND_MSG = {
   busy: 'Bộ phát đang bận, thử lại.',
 };
 
-async function send(btn, cmdId, d) {
-  if (btn && locked(btn)) return;
+async function send(btn, cmdId, d, repeat = false) {
+  if (btn && !repeat && locked(btn)) return;
   const c = (S.cmds[d.id] || []).find(by('id', cmdId));
   const label = c ? c.label : '';
   S.fb = { dev: d.id, state: 'busy', label };

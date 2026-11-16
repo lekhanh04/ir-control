@@ -4,6 +4,8 @@ Tài liệu này là "hợp đồng" để firmware ESP8266 và module giọng n
 
 Mọi payload là JSON UTF-8. Tiền tố topic mặc định `irhub` (đổi bằng `MQTT_PREFIX`).
 
+**Đăng nhập MQTT:** cấu hình mẫu `deploy/mosquitto-irhub.conf` bắt buộc tài khoản/mật khẩu. ESP8266 và module giọng nói phải kết nối bằng cùng tài khoản đặt ở `MQTT_USER`/`MQTT_PASS` của backend.
+
 ## 1. ESP8266 Slave (bộ phát IR ở các phòng)
 
 Mỗi phòng có một hoặc nhiều bộ phát (phòng rộng hoặc có vật che). Firmware không cần biết mình ở phòng nào: việc gán phòng và chọn bộ phát cho từng thiết bị làm trên giao diện, lưu ở Pi.
@@ -36,7 +38,16 @@ Hai dạng, tương ứng hai kiểu lưu trong bảng `commands`:
 {"req": "a1b2c3d4", "type": "raw", "freq": 38, "data": [9000, 4500, 560, 1690, 560, 560, "...", 560]}
 ```
 
-- `protocol`: hiện backend nhận dạng `NEC` và `SAMSUNG`. Phát bằng `irsend.sendNEC(value, bits)` / `irsend.sendSAMSUNG(value, bits)` của IRremoteESP8266.
+- `protocol`: backend nhận dạng `NEC`, `SAMSUNG` (32 bit), `SONY` (12/15/20 bit) và `PANASONIC` (48 bit). Phát bằng IRremoteESP8266:
+
+  | protocol | Lệnh phát | Ghi chú |
+  |---|---|---|
+  | `NEC` | `irsend.sendNEC(value, bits)` | |
+  | `SAMSUNG` | `irsend.sendSAMSUNG(value, bits)` | |
+  | `SONY` | `irsend.sendSony(value, bits, 2)` | thiết bị Sony cần nhận mã ít nhất 3 lần (1 + 2 lặp) |
+  | `PANASONIC` | `irsend.sendPanasonic64(value, bits)` | `value` dài 48 bit, đọc bằng `strtoull` vào `uint64_t` |
+
+  Giao thức không biết → gửi `ack` với `"ok": false, "err": "bad_payload"`.
 - `value` là chuỗi hex, bit truyền đi đầu tiên là bit cao nhất, đúng quy ước của IRremoteESP8266. Đọc bằng `strtoull(value, nullptr, 16)`.
 - `raw`: mảng thời gian (µs) xen kẽ mark/space, bắt đầu bằng mark. Phát bằng `irsend.sendRaw(buf, len, freq)`. Điều hòa thường thuộc dạng này, có thể dài 200–600 phần tử.
 - Sau khi phát xong, **luôn gửi `ack` với đúng `req`**. Backend chờ ACK tối đa 3 giây (`ACK_TIMEOUT_S`). Không có ACK thì giao diện báo "Bộ phát không xác nhận".
@@ -48,7 +59,7 @@ Hai dạng, tương ứng hai kiểu lưu trong bảng `commands`:
 
 ### 1.3 Khung firmware tham khảo (chưa biên dịch thử)
 
-Chỉ cần sửa 3 chỗ: `TEN_WIFI`, `MAT_KHAU` và IP của Raspberry Pi. Mở Serial Monitor ở 115200 baud để xem mạch đang làm gì.
+Chỉ cần sửa các hằng số ở đầu file: Wi-Fi, IP của Raspberry Pi, tài khoản MQTT. Mở Serial Monitor ở 115200 baud để xem mạch đang làm gì.
 
 ```cpp
 // platformio.ini: lib_deps = crankyoldgit/IRremoteESP8266, knolleary/PubSubClient, bblanchon/ArduinoJson@^7
@@ -57,6 +68,12 @@ Chỉ cần sửa 3 chỗ: `TEN_WIFI`, `MAT_KHAU` và IP của Raspberry Pi. M�
 #include <ArduinoJson.h>
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
+
+const char* WIFI_SSID = "TEN_WIFI";
+const char* WIFI_PASS = "MAT_KHAU";
+const char* MQTT_HOST = "192.168.1.10";  // IP của Raspberry Pi
+const char* MQTT_USER = "irhub";         // trùng MQTT_USER / MQTT_PASS trong backend/.env
+const char* MQTT_PASS = "MAT_KHAU_MQTT";
 
 const uint16_t IR_LED = 4;              // GPIO4 (D2) → transistor/MOSFET → LED IR 940 nm
 IRsend irsend(IR_LED);
@@ -89,6 +106,8 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     const char* p = d["protocol"] | "";
     if (!strcmp(p, "NEC")) irsend.sendNEC(v, bits);
     else if (!strcmp(p, "SAMSUNG")) irsend.sendSAMSUNG(v, bits);
+    else if (!strcmp(p, "SONY")) irsend.sendSony(v, bits, 2);
+    else if (!strcmp(p, "PANASONIC")) irsend.sendPanasonic64(v, bits);
     else ok = false;
   } else if (!strcmp(type, "raw")) {
     JsonArray a = d["data"].as<JsonArray>();
@@ -105,7 +124,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
 void connectMqtt() {
   while (!mqtt.connected()) {
-    if (mqtt.connect(id.c_str(), /*user*/ nullptr, /*pass*/ nullptr, tStatus.c_str(), 1, true, "{\"online\":false}")) {
+    if (mqtt.connect(id.c_str(), MQTT_USER, MQTT_PASS, tStatus.c_str(), 1, true, "{\"online\":false}")) {
       mqtt.subscribe(tCmd.c_str(), 1);
       mqtt.subscribe(tIdentify.c_str(), 0);
       publishStatus(true);
@@ -121,10 +140,10 @@ void setup() {
   char buf[16]; snprintf(buf, sizeof buf, "esp-%06x", ESP.getChipId()); id = buf;
   tStatus = "irhub/slave/" + id + "/status"; tCmd = "irhub/slave/" + id + "/cmd";
   tAck = "irhub/slave/" + id + "/ack";       tIdentify = "irhub/slave/" + id + "/identify";
-  WiFi.begin("TEN_WIFI", "MAT_KHAU");
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
   while (WiFi.status() != WL_CONNECTED) delay(300);
   Serial.println("Wi-Fi OK, IP: " + WiFi.localIP().toString());
-  mqtt.setServer("192.168.1.10", 1883);    // IP của Raspberry Pi
+  mqtt.setServer(MQTT_HOST, 1883);
   mqtt.setBufferSize(8192);
   mqtt.setCallback(onMessage);
 }
@@ -149,7 +168,9 @@ Module tự nhận dạng câu nói (offline hoặc online tùy phần cứng) r
 | Pi → Module | `irhub/voice/config` | **có** | `{"enabled": true, "sensitivity": "low" \| "mid" \| "high"}` |
 
 - Nếu module chỉ nhận được một tập lệnh cố định (mã số), hãy đổi mã đó thành câu chữ tương ứng trước khi gửi `result`.
-- Cách Pi hiểu câu: tên phòng + tên thiết bị (hoặc loại: "điều hòa", "tivi", "quạt", "máy chiếu") + hành động ("bật/tắt/mở" → nút Nguồn, "tăng âm lượng", "giảm nhiệt độ", "kênh tiếp", "tắt tiếng"…). Nút tự tạo được gọi theo tên ("mở Netflix").
+- Cách Pi hiểu câu: tên phòng + tên thiết bị (hoặc loại: "điều hòa", "tivi", "quạt", "máy chiếu") + hành động ("bật/tắt/mở" → nút Nguồn, "tăng âm lượng", "giảm nhiệt độ", "kênh tiếp", "tắt tiếng"…). Nút tự tạo được gọi theo tên ("mở Netflix"), ngữ cảnh gọi theo tên ("bật chế độ đi ngủ").
+- Chữ có dấu hay không dấu đều được ("bat tivi phong khach"); so khớp theo nguyên từ.
+- Tên thiết bị chứa tên loại khác (vd "Quạt điều hòa" chứa "điều hòa") vẫn được nhận đúng: cụm khớp dài hơn được ưu tiên.
 - Thiếu tên phòng mà nhà có nhiều thiết bị cùng loại: dùng "phòng mặc định" trong **Quản lý › Giọng nói**; không có thì báo "Chưa hiểu lệnh".
 - IR thường chỉ có một nút nguồn bật/tắt luân phiên, nên "bật" và "tắt" đều gửi nút Nguồn.
 
@@ -158,5 +179,6 @@ Module tự nhận dạng câu nói (offline hoặc online tùy phần cứng) r
 - Nối chân OUT của VS1838B/HX1838B/TSOP vào GPIO 18 (BCM, đổi bằng `IR_GPIO`), VCC 3,3 V, GND.
 - Cần dịch vụ pigpio: `sudo apt install pigpio python3-pigpio && sudo systemctl enable --now pigpiod`.
 - Backend đo thời gian giữa các cạnh, coi khoảng lặng 20 ms là hết một khung, bỏ khung ngắn hơn 6 cạnh (nhiễu, mã lặp khi giữ nút).
-- Mỗi lần học thu 3 khung, so sánh từng xung (lệch tối đa 25% hoặc 150 µs). Khớp từ 90% trở lên (`LEARN_MIN_MATCH`) thì lấy trung bình. Nhận dạng được NEC/SAMSUNG thì lưu giao thức, không thì lưu RAW.
+- Mỗi lần học thu 3 khung, so sánh từng xung (lệch tối đa 25% hoặc 150 µs). Khớp từ 90% trở lên (`LEARN_MIN_MATCH`) thì lấy trung bình. Nhận dạng được NEC/SAMSUNG/SONY/PANASONIC (đúng số bit, không dư xung) thì lưu giao thức, không thì lưu RAW.
+- Tín hiệu đến sau khi phiên học hết giờ (15 giây) không được tính.
 - Mắt thu đã lọc sóng mang nên không đo được tần số. Mã RAW được gán 38 kHz, đúng với đa số remote.

@@ -52,6 +52,9 @@ export function managePage(v) {
         `<a href="#them-tb" data-add-room="${r.id}" style="color:var(--text-muted)">${ic('plus')}<span class="grow">Thêm thiết bị vào ${esc(r.name.toLowerCase())}</span></a></div></section>`;
     }).join('') +
     `<button type="button" class="btn full dash" id="addroom">${ic('plus')}Thêm phòng</button>` +
+    '<h2 class="sec">Tự động</h2><nav class="list" aria-label="Tự động">' +
+    row('ngu-canh', 'Ngữ cảnh', S.scenes && S.scenes.length ? `${S.scenes.length} ngữ cảnh` : 'Một lần chạm, phát nhiều nút', ic('play')) +
+    row('hen-gio', 'Hẹn giờ', 'Chạy ngữ cảnh hoặc nút vào giờ cố định', ic('clock')) + '</nav>' +
     '<h2 class="sec">Hệ thống</h2><nav class="list" aria-label="Hệ thống">' +
     row('bo-phat', 'Bộ phát ESP8266', `${on}/${S.slaves.length} đang hoạt động${free ? ` · ${free} chưa gán phòng` : ''}`, free ? '<span class="badge warn">Mới</span>' : '') +
     (S.voice ? row('giong-noi', 'Giọng nói', S.voice.module === 'missing' ? 'Chưa thấy module giọng nói' : S.voice.enabled ? 'Đang nghe' : 'Đang tắt') : '') +

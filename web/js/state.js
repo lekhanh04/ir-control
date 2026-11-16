@@ -12,6 +12,9 @@ export const S = {
   online: null,        // còn kết nối bộ trung tâm?
   system: null,        // GET /api/system
   rooms: null, devices: null, slaves: null,
+  scenes: null,        // GET /api/scenes: ngữ cảnh kèm các bước
+  schedules: null,     // GET /api/schedules (tải khi mở trang Hẹn giờ)
+  auth: null,          // GET /api/auth: {required, ok}
   types: null,         // GET /api/device-types: [{code, label}] theo thứ tự hiển thị
   cmds: {},            // device_id → danh sách nút
   history: null, histFilter: 'all',
@@ -22,16 +25,16 @@ export const S = {
   formRoom: null, formType: null,  // giá trị mặc định cho form thêm thiết bị
   waiting: false,      // trang đang chờ dữ liệu nền để vẽ lại
   cleanup: null,       // hàm dọn dẹp khi rời trang
-  hooks: { render() {}, poll() {} },   // main.js gán
+  hooks: { render() {}, poll() {}, login() {} },   // main.js gán
 };
 
 export async function loadBase() {
   try {
-    const [rooms, devices, slaves, voice, types] = await Promise.all([
+    const [rooms, devices, slaves, voice, types, scenes] = await Promise.all([
       api('GET', '/api/rooms'), api('GET', '/api/devices'), api('GET', '/api/slaves'), api('GET', '/api/voice').catch(() => null),
-      S.types ? S.types : api('GET', '/api/device-types'),
+      S.types ? S.types : api('GET', '/api/device-types'), api('GET', '/api/scenes').catch(() => []),
     ]);
-    Object.assign(S, { rooms, devices, slaves, voice, types });
+    Object.assign(S, { rooms, devices, slaves, voice, types, scenes });
     if (!rooms.some(by('id', S.room))) S.room = rooms[0] ? rooms[0].id : null;
     if (S.waiting) S.hooks.render();
   } catch (e) { /* poll() sẽ báo mất kết nối */ }
@@ -43,6 +46,7 @@ export async function loadCmds(id) {
 }
 
 export function handleErr(e) {
+  if (e.code === 'auth') return;   // hộp nhập mã PIN đã hiện
   if (e.status === 429 || e.code === 'busy') return toast('Hệ thống đang bận, thử lại sau 1 giây');
   if (e.status === 0) { S.hooks.poll(); return toast('Không kết nối được bộ trung tâm'); }
   toast(e.message || 'Có lỗi xảy ra');

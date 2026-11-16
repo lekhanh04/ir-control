@@ -3,6 +3,7 @@ import os
 
 from flask import Flask, jsonify, send_from_directory
 
+from .auth import Auth
 from .config import Config
 from .hub import Hub
 
@@ -12,6 +13,7 @@ def create_app(cfg=Config):
     app.json.ensure_ascii = False
     hub = Hub(cfg)
     app.extensions['irhub'] = hub
+    app.extensions['irhub_auth'] = Auth(app, hub)
 
     from .api import bp, dev
     app.register_blueprint(bp)
@@ -30,13 +32,15 @@ def create_app(cfg=Config):
     @app.get('/<path:path>')
     def static_files(path):
         if os.path.isfile(os.path.join(cfg.WEB_DIR, path)):
+            if path.endswith('.webmanifest'):
+                return send_from_directory(cfg.WEB_DIR, path, mimetype='application/manifest+json')
             return send_from_directory(cfg.WEB_DIR, path)
         return send_from_directory(cfg.WEB_DIR, 'index.html')
 
     @app.after_request
     def no_cache_js(resp):
         # Tránh trình duyệt điện thoại giữ bản JS cũ khi bạn đang sửa code
-        if resp.mimetype in ('text/javascript', 'application/javascript', 'text/css', 'text/html'):
+        if resp.mimetype in ('text/javascript', 'application/javascript', 'text/css', 'text/html', 'application/manifest+json'):
             resp.headers['Cache-Control'] = 'no-cache'
         return resp
 

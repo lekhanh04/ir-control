@@ -22,8 +22,11 @@ class LearnSession:
         self.decoded = None
         self.raw = None
 
+    def expired(self):
+        return time.time() - self.started > self.timeout_s
+
     def public(self):
-        if self.state == 'waiting' and time.time() - self.started > self.timeout_s:
+        if self.state == 'waiting' and self.expired():
             self.state = 'timeout'
         out = {'session': self.id, 'state': self.state, 'count': len(self.frames), 'captures': self.captures}
         if self.state in ('done', 'mismatch'):
@@ -35,8 +38,12 @@ class LearnSession:
         return out
 
 
+class ReceiverBusy(Exception):
+    """Một người khác đang học mã (phiên đang chờ tín hiệu và chưa hết giờ)."""
+
+
 class LearnManager:
-    """Mỗi lúc chỉ một phiên học (một mắt thu). Phiên mới thay phiên cũ."""
+    """Mỗi lúc chỉ một phiên học (một mắt thu). Phiên đang chờ tín hiệu thì báo bận, trừ khi force=True."""
 
     def __init__(self, hub):
         self.hub = hub
@@ -45,11 +52,16 @@ class LearnManager:
         if hub.receiver:
             hub.receiver.on_frame = self._on_frame
 
-    def start(self, device, key):
+    def start(self, device, key, force=False):
         if not self.hub.receiver:
             raise RuntimeError('ir_receiver')
         cfg = self.hub.cfg
         with self._lock:
+            old = self.session
+            if old and old.state == 'waiting' and not old.expired() and not force:
+                raise ReceiverBusy()
+            if old:
+                old.state = 'cancelled'
             s = LearnSession(device, key, cfg.LEARN_CAPTURES, cfg.LEARN_TIMEOUT_S)
             self.session = s
         self.hub.receiver.arm({'device_id': device['id'], 'type': device['type'], 'key': key})
@@ -69,6 +81,9 @@ class LearnManager:
         with self._lock:
             s = self.session
             if not s or s.state != 'waiting':
+                return
+            if s.expired():          # tín hiệu đến sau khi hết giờ không được tính
+                s.state = 'timeout'
                 return
             s.frames.append(frame)
             if len(s.frames) < s.captures:

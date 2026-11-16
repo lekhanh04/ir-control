@@ -50,4 +50,7 @@ class Config:
     LEARN_TIMEOUT_S = int(os.getenv('LEARN_TIMEOUT_S', '15'))
     LEARN_MIN_MATCH = int(os.getenv('LEARN_MIN_MATCH', '90'))  # % độ khớp tối thiểu giữa các lần thu
 
-    VERSION = '1.1.0'
+    # Mã PIN đăng nhập giao diện web và API (4–12 chữ số). Để trống = không cần đăng nhập.
+    PIN = os.getenv('IRHUB_PIN', '').strip()
+
+    VERSION = '1.2.0'

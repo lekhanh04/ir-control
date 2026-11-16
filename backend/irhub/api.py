@@ -11,13 +11,24 @@ from flask import Blueprint, Response, after_this_request, current_app, jsonify,
 
 from .db import now_ms
 from .hub import public_slave
+from .learn import ReceiverBusy
 
 bp = Blueprint('api', __name__, url_prefix='/api')
 KEY_RE = re.compile(r'^[a-z0-9_]{1,20}$')
+TIME_RE = re.compile(r'^([01][0-9]|2[0-3]):[0-5][0-9]$')
+MAX_SCENE_STEPS = 30
 
 
 def hub():
     return current_app.extensions['irhub']
+
+
+def auth():
+    return current_app.extensions['irhub_auth']
+
+
+def is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
 
 
 def err(status, code, message):
@@ -42,6 +53,24 @@ def text(v, lo, hi):
 @bp.errorhandler(sqlite3.IntegrityError)
 def _integrity(e):
     return err(409, 'conflict', 'Dữ liệu bị trùng hoặc đang được dùng')
+
+
+# ---------- Đăng nhập (PIN) ----------
+@bp.get('/auth')
+def auth_status():
+    return jsonify(auth().status())
+
+
+@bp.post('/login')
+def login():
+    ok, e = auth().login(body().get('pin'))
+    return jsonify(auth().status()) if ok else err(*e)
+
+
+@bp.post('/logout')
+def logout():
+    auth().logout()
+    return jsonify(auth().status())
 
 
 # ---------- Hệ thống ----------
@@ -285,7 +314,9 @@ def learn_start():
     if not KEY_RE.match(b.get('key') or ''):
         return err(400, 'key', 'Mã nút không hợp lệ')
     try:
-        s = hub().learn.start(dev, b['key'])
+        s = hub().learn.start(dev, b['key'], force=bool(b.get('force')))
+    except ReceiverBusy:
+        return err(409, 'receiver_busy', 'Mắt thu đang được dùng để học một nút khác')
     except RuntimeError:
         return err(503, 'ir_receiver', 'Mắt thu IR không hoạt động')
     return jsonify(session=s.id, captures=s.captures, timeout_s=s.timeout_s)
@@ -330,6 +361,170 @@ def learn_save(sid):
 def learn_cancel(sid):
     hub().learn.cancel(sid)
     return jsonify(ok=True)
+
+
+# ---------- Ngữ cảnh (macro) ----------
+def _scenes(scene_id=None):
+    db = hub().db
+    where, args = ('WHERE id = ?', (scene_id,)) if scene_id else ('', ())
+    scenes = db.all('SELECT id, name FROM scenes %s ORDER BY id' % where, args)
+    steps = db.all('SELECT s.scene_id, s.command_id, s.delay_ms, c.key, c.label, c.device_id, d.name AS device_name, r.name AS room_name '
+                   'FROM scene_steps s JOIN commands c ON c.id = s.command_id JOIN devices d ON d.id = c.device_id '
+                   'JOIN rooms r ON r.id = d.room_id ORDER BY s.scene_id, s.position, s.id')
+    for sc in scenes:
+        sc['steps'] = [{k: v for k, v in st.items() if k != 'scene_id'} for st in steps if st['scene_id'] == sc['id']]
+    return scenes
+
+
+def _scene_body(b, sid=None):
+    """Trả (name, [(command_id, delay_ms)], None) hoặc (None, None, (status, code, message))."""
+    db = hub().db
+    name = text(b.get('name'), 1, 30)
+    if not name:
+        return None, None, (400, 'name', 'Tên ngữ cảnh từ 1 đến 30 ký tự')
+    if ci_taken(db.all('SELECT id, name FROM scenes'), 'name', name, sid):
+        return None, None, (409, 'exists', 'Đã có ngữ cảnh tên này')
+    steps = b.get('steps')
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_SCENE_STEPS:
+        return None, None, (400, 'steps', 'Ngữ cảnh cần từ 1 đến %d bước' % MAX_SCENE_STEPS)
+    out = []
+    for st in steps:
+        st = st if isinstance(st, dict) else {}
+        cid, delay = st.get('command_id'), st.get('delay_ms', 500)
+        if not is_int(cid) or not db.one('SELECT id FROM commands WHERE id = ?', (cid,)):
+            return None, None, (400, 'steps', 'Có bước dùng nút không tồn tại')
+        if not is_int(delay) or not 0 <= delay <= 60000:
+            return None, None, (400, 'steps', 'Thời gian chờ từ 0 đến 60000 ms')
+        out.append((cid, delay))
+    return name, out, None
+
+
+def _save_scene(name, steps, sid=None):
+    c = hub().db.connect()
+    try:
+        with c:   # một giao dịch: lỗi giữa chừng thì không đổi gì
+            if sid:
+                c.execute('UPDATE scenes SET name = ? WHERE id = ?', (name, sid))
+                c.execute('DELETE FROM scene_steps WHERE scene_id = ?', (sid,))
+            else:
+                sid = c.execute('INSERT INTO scenes (name, created_at) VALUES (?, ?)', (name, now_ms())).lastrowid
+            c.executemany('INSERT INTO scene_steps (scene_id, position, command_id, delay_ms) VALUES (?, ?, ?, ?)',
+                          [(sid, i, cid, delay) for i, (cid, delay) in enumerate(steps)])
+    finally:
+        c.close()
+    return sid
+
+
+@bp.get('/scenes')
+def scenes_list():
+    return jsonify(_scenes())
+
+
+@bp.post('/scenes')
+def scenes_create():
+    name, steps, e = _scene_body(body())
+    if e:
+        return err(*e)
+    return jsonify(_scenes(_save_scene(name, steps))[0]), 201
+
+
+@bp.put('/scenes/<int:sid>')
+def scenes_update(sid):
+    if not hub().db.one('SELECT id FROM scenes WHERE id = ?', (sid,)):
+        return err(404, 'not_found', 'Không tìm thấy ngữ cảnh')
+    name, steps, e = _scene_body(body(), sid)
+    if e:
+        return err(*e)
+    _save_scene(name, steps, sid)
+    return jsonify(_scenes(sid)[0])
+
+
+@bp.delete('/scenes/<int:sid>')
+def scenes_delete(sid):
+    _, n = hub().db.run('DELETE FROM scenes WHERE id = ?', (sid,))
+    return jsonify(ok=True) if n else err(404, 'not_found', 'Không tìm thấy ngữ cảnh')
+
+
+@bp.post('/scenes/<int:sid>/run')
+def scenes_run(sid):
+    res = hub().run_scene(sid, source='scene')
+    return jsonify(res) if res else err(404, 'not_found', 'Không tìm thấy ngữ cảnh')
+
+
+# ---------- Hẹn giờ ----------
+def _schedules(sched_id=None):
+    where, args = ('WHERE s.id = ?', (sched_id,)) if sched_id else ('', ())
+    rows = hub().db.all('SELECT s.id, s.scene_id, s.command_id, s.at_time, s.days, s.enabled, s.last_run, '
+                        'sc.name AS scene_name, c.label AS command_label, c.device_id, d.name AS device_name, r.name AS room_name '
+                        'FROM schedules s LEFT JOIN scenes sc ON sc.id = s.scene_id LEFT JOIN commands c ON c.id = s.command_id '
+                        'LEFT JOIN devices d ON d.id = c.device_id LEFT JOIN rooms r ON r.id = d.room_id '
+                        '%s ORDER BY s.at_time, s.id' % where, args)
+    for r in rows:
+        r['enabled'] = bool(r['enabled'])
+    return rows
+
+
+def _schedule_body(b, cur=None):
+    """Trả (các cột cần ghi, None) hoặc (None, thông báo lỗi)."""
+    db, out = hub().db, {}
+    if not cur or 'scene_id' in b or 'command_id' in b:
+        scene_id, command_id = b.get('scene_id') or None, b.get('command_id') or None
+        if (scene_id is None) == (command_id is None):
+            return None, 'Chọn một ngữ cảnh hoặc một nút'
+        if scene_id is not None and not (is_int(scene_id) and db.one('SELECT id FROM scenes WHERE id = ?', (scene_id,))):
+            return None, 'Ngữ cảnh không tồn tại'
+        if command_id is not None and not (is_int(command_id) and db.one('SELECT id FROM commands WHERE id = ?', (command_id,))):
+            return None, 'Nút không tồn tại'
+        out.update(scene_id=scene_id, command_id=command_id)
+    if not cur or 'at_time' in b:
+        if not isinstance(b.get('at_time'), str) or not TIME_RE.match(b['at_time']):
+            return None, 'Giờ phải có dạng HH:MM (00:00 đến 23:59)'
+        out['at_time'] = b['at_time']
+        out['last_run'] = None     # đổi giờ → được chạy ngay trong phút mới
+    if not cur or 'days' in b:
+        days = b.get('days', 127)
+        if not is_int(days) or not 1 <= days <= 127:
+            return None, 'Chọn ít nhất một ngày trong tuần'
+        out['days'] = days
+    if 'enabled' in b:
+        out['enabled'] = 1 if b['enabled'] else 0
+    return out, None
+
+
+@bp.get('/schedules')
+def schedules_list():
+    return jsonify(_schedules())
+
+
+@bp.post('/schedules')
+def schedules_create():
+    d, e = _schedule_body(body())
+    if e:
+        return err(400, 'invalid', e)
+    d.setdefault('enabled', 1)
+    d['created_at'] = now_ms()
+    sql = 'INSERT INTO schedules (%s) VALUES (%s)' % (', '.join(d), ', '.join(['?'] * len(d)))
+    sid, _ = hub().db.run(sql, tuple(d.values()))
+    return jsonify(_schedules(sid)[0]), 201
+
+
+@bp.patch('/schedules/<int:sid>')
+def schedules_update(sid):
+    cur = hub().db.one('SELECT * FROM schedules WHERE id = ?', (sid,))
+    if not cur:
+        return err(404, 'not_found', 'Không tìm thấy hẹn giờ')
+    d, e = _schedule_body(body(), cur)
+    if e:
+        return err(400, 'invalid', e)
+    if d:
+        hub().db.run('UPDATE schedules SET %s WHERE id = ?' % ', '.join('%s = ?' % k for k in d), tuple(d.values()) + (sid,))
+    return jsonify(_schedules(sid)[0])
+
+
+@bp.delete('/schedules/<int:sid>')
+def schedules_delete(sid):
+    _, n = hub().db.run('DELETE FROM schedules WHERE id = ?', (sid,))
+    return jsonify(ok=True) if n else err(404, 'not_found', 'Không tìm thấy hẹn giờ')
 
 
 # ---------- Bộ phát ESP8266 ----------

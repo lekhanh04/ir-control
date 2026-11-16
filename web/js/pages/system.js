@@ -11,8 +11,12 @@ export function systemPage(v) {
     '<a class="btn" href="/api/backup" download>Tải bản sao lưu</a></section>' +
     '<section class="card"><h2>Lịch sử điều khiển</h2><div class="field"><label for="keep">Tự xóa lịch sử cũ hơn</label><select id="keep" class="inp" disabled></select></div>' +
     '<p class="hint">Giữ cơ sở dữ liệu gọn trên thẻ nhớ của Raspberry Pi. Phòng, thiết bị và mã IR không bị ảnh hưởng.</p></section>' +
+    (S.auth && S.auth.required ? '<section class="card"><h2>Đăng nhập</h2><p class="small muted">Trình duyệt này đang được nhớ. Đăng xuất khi dùng máy của người khác. Đổi mã PIN bằng biến IRHUB_PIN trong backend/.env.</p>' +
+      '<button type="button" class="btn" id="logout">Đăng xuất</button></section>' : '') +
     '<p class="hint" style="text-align:center" id="ver"></p>';
   paintSystem();
+  const lo = $('#logout', v);
+  if (lo) lo.onclick = () => api('POST', '/api/logout').then(() => { toast('Đã đăng xuất'); S.hooks.login(); }, handleErr);
   const sel = $('#keep', v);
   api('GET', '/api/settings').then((st) => {
     const opts = KEEP.some(([d]) => d === st.history_retention_days) ? KEEP : [[st.history_retention_days, st.history_retention_days + ' ngày'], ...KEEP];

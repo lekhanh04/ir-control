@@ -1,5 +1,5 @@
--- Cơ sở dữ liệu SQLite của bộ trung tâm (Raspberry Pi 4B) – phiên bản cấu trúc 2
--- Phòng → Thiết bị → Lệnh (mã IR); bộ phát ESP8266 theo phòng; lịch sử điều khiển.
+-- Cơ sở dữ liệu SQLite của bộ trung tâm (Raspberry Pi 4B) – phiên bản cấu trúc 3
+-- Phòng → Thiết bị → Lệnh (mã IR); bộ phát ESP8266 theo phòng; ngữ cảnh, hẹn giờ; lịch sử điều khiển.
 -- Thời gian *_at, last_seen tính bằng mili giây Unix (UTC).
 --
 -- File này chỉ dùng khi tạo CSDL MỚI. CSDL đã có được nâng cấp bằng migrations.py
@@ -85,8 +85,8 @@ CREATE TABLE IF NOT EXISTS history (
   device_name TEXT,
   key         TEXT,
   label       TEXT,
-  source      TEXT    NOT NULL CHECK (source IN ('web', 'voice')),
-  text        TEXT,                          -- câu nói, nếu từ giọng nói
+  source      TEXT    NOT NULL CHECK (source IN ('web', 'voice', 'scene', 'schedule')),
+  text        TEXT,                          -- câu nói (voice), tên ngữ cảnh (scene), mô tả hẹn giờ (schedule)
   slave_id    TEXT,
   status      TEXT    NOT NULL CHECK (status IN ('ok', 'timeout', 'offline', 'error', 'not_understood')),
   latency_ms  INTEGER,
@@ -95,6 +95,38 @@ CREATE TABLE IF NOT EXISTS history (
 );
 CREATE INDEX IF NOT EXISTS idx_history_at ON history (at DESC);
 CREATE INDEX IF NOT EXISTS idx_history_device ON history (device_id, at DESC);
+
+-- Ngữ cảnh (macro): bấm một lần, phát lần lượt nhiều nút, vd "Đi ngủ" = tắt tivi + tắt đèn + bật quạt.
+CREATE TABLE IF NOT EXISTS scenes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT    NOT NULL UNIQUE COLLATE NOCASE CHECK (length(trim(name)) BETWEEN 1 AND 30),
+  created_at  INTEGER NOT NULL
+);
+
+-- Các bước của ngữ cảnh, phát theo position tăng dần; chờ delay_ms sau mỗi bước.
+-- Xóa nút (hoặc thiết bị) thì bước tương ứng tự mất.
+CREATE TABLE IF NOT EXISTS scene_steps (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  scene_id    INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+  position    INTEGER NOT NULL,
+  command_id  INTEGER NOT NULL REFERENCES commands(id) ON DELETE CASCADE,
+  delay_ms    INTEGER NOT NULL DEFAULT 500 CHECK (delay_ms BETWEEN 0 AND 60000)
+);
+CREATE INDEX IF NOT EXISTS idx_scene_steps ON scene_steps (scene_id, position);
+
+-- Hẹn giờ: chạy một ngữ cảnh HOẶC một nút vào giờ at_time (giờ địa phương của Pi) các ngày trong days.
+-- days: bit 0 = Thứ Hai … bit 6 = Chủ nhật (127 = mọi ngày). last_run chống chạy lặp trong cùng một phút.
+CREATE TABLE IF NOT EXISTS schedules (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  scene_id    INTEGER REFERENCES scenes(id) ON DELETE CASCADE,
+  command_id  INTEGER REFERENCES commands(id) ON DELETE CASCADE,
+  at_time     TEXT    NOT NULL CHECK (at_time GLOB '[0-2][0-9]:[0-5][0-9]' AND at_time < '24:00'),
+  days        INTEGER NOT NULL DEFAULT 127 CHECK (days BETWEEN 1 AND 127),
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  last_run    INTEGER,
+  created_at  INTEGER NOT NULL,
+  CHECK ((scene_id IS NULL) <> (command_id IS NULL))
+);
 
 -- Cài đặt dạng khóa–giá trị
 CREATE TABLE IF NOT EXISTS settings (

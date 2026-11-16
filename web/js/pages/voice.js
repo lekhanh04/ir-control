@@ -19,7 +19,7 @@ export function paintVoice() {
   if (vo.module === 'missing') h = `<span class="vic warn">${ic('alert')}</span><div class="grow"><b>Không tìm thấy module giọng nói</b><p class="small muted">Lệnh giọng nói tạm thời không dùng được.</p></div>${link}`;
   else if (!vo.enabled) h = `<span class="vic off">${ic('mic')}</span><div class="grow"><b>Micro đang tắt</b></div><button type="button" class="btn sm" id="vtog">Bật micro</button>`;
   else if (n.state === 'listening') h = `<span class="vic on">${ic('mic')}</span><div class="grow"><b>Đang nghe…</b></div>`;
-  else if (n.state === 'result' && n.ok) h = `<span class="vic ok">${ic('check')}</span><div class="grow"><b>“${esc(n.text)}”</b><p class="small">Đã phát: ${esc(n.label)}</p></div>`;
+  else if (n.state === 'result' && n.ok) h = `<span class="vic ok">${ic('check')}</span><div class="grow"><b>“${esc(n.text)}”</b><p class="small">${esc(n.label)}</p></div>`;
   else if (n.state === 'result') h = `<span class="vic warn">${ic('alert')}</span><div class="grow"><b>“${esc(n.text)}”</b><p class="small">${esc(n.message)}</p></div>`;
   else h = `<span class="vic">${ic('mic')}</span><div class="grow"><b>Đang chờ lệnh giọng nói</b><p class="small muted">Thử nói: “Bật tivi phòng khách”</p></div>${link}`;
   el.innerHTML = h;
@@ -37,14 +37,20 @@ export function onVoice(ev) {
     return;
   }
   const d = (S.devices || []).find(by('id', ev.device_id));
-  const label = d ? `${roomName(d.room_id)} · ${d.name} · ${ev.label}` : '';
   const ok = ev.ok && ev.status === 'ok';
+  const label = ev.scene ? `Đã chạy ngữ cảnh “${ev.scene}”` : 'Đã phát: ' + (d ? `${roomName(d.room_id)} · ${d.name} · ${ev.label}` : ev.label || '');
+  const DEVICE_MSG = {
+    offline: `Bộ phát của ${roomName(d && d.room_id).toLowerCase()} đang mất kết nối.`,
+    timeout: 'Bộ phát không xác nhận.',
+    error: 'Bộ phát báo lỗi khi phát lệnh.',
+    busy: 'Bộ phát đang bận, nói lại sau giây lát.',
+  };
   const message = !ev.ok ? 'Chưa hiểu lệnh. Nói kèm tên thiết bị và phòng, ví dụ “Tắt điều hòa phòng ngủ”.'
-    : ev.status === 'offline' ? `Bộ phát của ${roomName(d && d.room_id).toLowerCase()} đang mất kết nối.`
-      : 'Bộ phát không xác nhận.';
+    : ev.scene ? (ev.status === 'partial' ? `Ngữ cảnh “${ev.scene}”: một số lệnh không thành công.` : `Ngữ cảnh “${ev.scene}”: không lệnh nào thành công.`)
+      : DEVICE_MSG[ev.status] || 'Không gửi được lệnh.';
   S.vnow = { state: 'result', ok, text: ev.text, label, message };
   if (cur().name === '') paintVoice();
-  else toast(ok ? 'Giọng nói: ' + label : 'Giọng nói: ' + message);
+  else toast('Giọng nói: ' + (ok ? label : message));
   S.vT = setTimeout(() => { S.vnow = { state: 'idle' }; paintVoice(); }, 7000);
 }
 
@@ -61,7 +67,8 @@ export function voicePage(v) {
     `<button type="button" class="chip" data-def="" aria-pressed="${!vo.default_room_id}">Không chọn</button>` +
     S.rooms.map((r) => `<button type="button" class="chip" data-def="${r.id}" aria-pressed="${vo.default_room_id === r.id}">${esc(r.name)}</button>`).join('') + '</div></section>' +
     '<section class="card"><h2>Cách nói</h2><p class="small muted">Nói <b>hành động + tên thiết bị + tên phòng</b>, đúng như tên trong mục Quản lý. Nút tự tạo gọi theo tên nút.</p>' +
-    '<ul class="tips"><li>“Bật tivi phòng khách”</li><li>“Tăng âm lượng tivi”</li><li>“Tắt điều hòa phòng ngủ”</li><li>“Mở Netflix”</li></ul></section>' +
+    '<ul class="tips"><li>“Bật tivi phòng khách”</li><li>“Tăng âm lượng tivi”</li><li>“Tắt điều hòa phòng ngủ”</li><li>“Mở Netflix”</li><li>“Bật chế độ đi ngủ” (tên <a href="#ngu-canh">ngữ cảnh</a>)</li></ul>' +
+    '<p class="small muted">Module gửi chữ không dấu cũng được, ví dụ “bat tivi phong khach”.</p></section>' +
     `<a class="btn full" href="#lich-su" id="vh">${ic('history')}Xem lịch sử lệnh giọng nói</a>`;
   const save = (body, msg) => api('POST', '/api/voice', body).then((x) => { S.voice = x; if (msg) toast(msg); render(); }, handleErr);
   $('#micsw', v).onclick = () => save({ enabled: !vo.enabled }, vo.enabled ? 'Đã tắt micro' : 'Đã bật micro');

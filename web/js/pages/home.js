@@ -4,12 +4,13 @@ import { S, store, skel, slaveLine , typeInfo } from '../state.js';
 import { render } from '../router.js';
 import { addRoom } from './manage.js';
 import { paintVoice } from './voice.js';
+import { runScene } from './scenes.js';
 
 export function homePage(v) {
   if (!S.rooms || !S.devices || !S.slaves) return skel(v);
   if (!S.rooms.length) {
     v.innerHTML = `<section class="card center" style="padding:40px 20px;gap:16px"><span class="muted">${ic('home')}</span>
-      <h2>Bắt đầu bằng việc tạo phòng</h2><p class="muted">Mỗi phòng có một bộ phát ESP8266 và các thiết bị trong phòng đó.</p>
+      <h2>Bắt đầu bằng việc tạo phòng</h2><p class="muted">Mỗi phòng có một hoặc nhiều bộ phát ESP8266 và các thiết bị trong phòng đó.</p>
       <button type="button" class="btn pri big full" id="nr">Tạo phòng đầu tiên</button></section>`;
     $('#nr', v).onclick = addRoom;
     return;
@@ -22,8 +23,13 @@ export function homePage(v) {
     '<div class="devs">' + devs.map((d) => {
       const t = typeInfo(d.type);
       return `<a class="dev" href="#tb-${d.id}"><span class="dico">${ic(t.icon)}</span><span><b>${esc(d.name)}</b><span class="small muted">${esc(d.brand || t.label)} · ${d.command_count || 0} nút</span></span></a>`;
-    }).join('') + `<a class="dev add" href="#them-tb">${ic('plus')}Thêm thiết bị</a></div>`;
+    }).join('') + `<a class="dev add" href="#them-tb">${ic('plus')}Thêm thiết bị</a></div>` +
+    (S.scenes && S.scenes.length
+      ? '<h2 class="sec">Ngữ cảnh</h2><div class="chips wrap" role="group" aria-label="Chạy ngữ cảnh">' +
+        S.scenes.map((sc) => `<button type="button" class="chip" data-scene="${sc.id}">${ic('play')}${esc(sc.name)}</button>`).join('') + '</div>'
+      : '');
   paintVoice();
+  $$('[data-scene]', v).forEach((b) => { b.onclick = () => runScene(S.scenes.find(by('id', +b.dataset.scene)), b); });
   $$('[data-room]', v).forEach((b) => { b.onclick = () => { S.room = +b.dataset.room; store.set('room', S.room); render(); }; });
   $('a.dev.add', v).onclick = () => { S.formRoom = S.room; };
 }

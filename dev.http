@@ -6,6 +6,12 @@
 ### Trạng thái bộ trung tâm
 GET {{host}}/api/system
 
+### Đăng nhập (chỉ cần khi backend đặt IRHUB_PIN; REST Client tự giữ cookie)
+POST {{host}}/api/login
+Content-Type: application/json
+
+{"pin": "1234"}
+
 ### Danh sách phòng, thiết bị, bộ phát
 GET {{host}}/api/rooms
 
@@ -102,3 +108,36 @@ POST {{host}}/api/dev/voice
 Content-Type: application/json
 
 {"text": "hát một bài đi"}
+
+### --- Ngữ cảnh: tắt tivi rồi tắt điều hòa phòng khách ---
+POST {{host}}/api/scenes
+Content-Type: application/json
+
+{"name": "Ra khỏi nhà", "steps": [{"command_id": 6, "delay_ms": 500}, {"command_id": 1}]}
+
+###
+GET {{host}}/api/scenes
+
+### Chạy ngữ cảnh id 1
+POST {{host}}/api/scenes/1/run
+
+### Gọi ngữ cảnh bằng giọng nói (không dấu cũng được)
+POST {{host}}/api/dev/voice
+Content-Type: application/json
+
+{"text": "bat che do ra khoi nha"}
+
+### --- Hẹn giờ: chạy ngữ cảnh 1 lúc 07:30 từ Thứ 2 đến Thứ 6 (days = 31) ---
+POST {{host}}/api/schedules
+Content-Type: application/json
+
+{"scene_id": 1, "at_time": "07:30", "days": 31}
+
+### Hẹn giờ một nút: tắt điều hòa phòng ngủ (nút 23) lúc 05:00 mọi ngày
+POST {{host}}/api/schedules
+Content-Type: application/json
+
+{"command_id": 23, "at_time": "05:00"}
+
+###
+GET {{host}}/api/schedules

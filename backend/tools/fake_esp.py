@@ -1,6 +1,6 @@
 """ESP8266 giả qua MQTT thật: dùng để thử backend ở chế độ IRHUB_SIMULATE=0 khi chưa có mạch.
 
-    python tools/fake_esp.py esp-test01 [--host localhost] [--fail]
+    python tools/fake_esp.py esp-test01 [--host localhost] [--user irhub --password ...] [--fail]
 
 Làm đúng như firmware trong docs/giao-tiep-thiet-bi.md: status retained + LWT, status 30 s/lần,
 nhận cmd → in ra mã sẽ phát → gửi ack; nhận identify → in thông báo.
@@ -16,12 +16,16 @@ ap.add_argument('id', help='mã bộ phát, vd esp-test01')
 ap.add_argument('--host', default='localhost')
 ap.add_argument('--port', type=int, default=1883)
 ap.add_argument('--prefix', default='irhub')
+ap.add_argument('--user', default='', help='tài khoản MQTT (khi Mosquitto bắt buộc đăng nhập)')
+ap.add_argument('--password', default='')
 ap.add_argument('--fail', action='store_true', help='không gửi ACK (thử trường hợp mất xác nhận)')
 args = ap.parse_args()
 
 base = '%s/slave/%s' % (args.prefix, args.id)
 c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=args.id)
 c.will_set(base + '/status', json.dumps({'online': False}), qos=1, retain=True)
+if args.user:
+    c.username_pw_set(args.user, args.password)
 
 
 def status():
@@ -30,6 +34,9 @@ def status():
 
 def on_connect(client, userdata, flags, reason_code, properties):
     print('Đã kết nối broker:', reason_code)
+    if reason_code.is_failure:
+        print('Sai tài khoản/mật khẩu MQTT? Dùng --user và --password.')
+        return
     client.subscribe([(base + '/cmd', 1), (base + '/identify', 0)])
     status()
 

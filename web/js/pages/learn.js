@@ -6,8 +6,8 @@ import { cur, go, render, setHeader } from '../router.js';
 
 let L = null;   // phiên học đang mở trên giao diện
 
-export function startLearnFor(device, key, label, replace) {
-  L = { device, key, label, replace, step: 'start', session: null, count: 0, total: 3, t0: 0, timeout: 15000, result: null, tested: false };
+export function startLearnFor(device, key, label, replace, force = false) {
+  L = { device, key, label, replace, force, step: 'start', session: null, count: 0, total: 3, t0: 0, timeout: 15000, result: null, tested: false };
   go('hoc');
 }
 
@@ -112,15 +112,18 @@ function paintCaps() {
 
 async function beginCapture() {
   try {
-    const r = await api('POST', '/api/learn', { device_id: L.device.id, key: L.key });
+    const r = await api('POST', '/api/learn', { device_id: L.device.id, key: L.key, force: L.force || undefined });
     Object.assign(L, { session: r.session, total: r.captures || 3, timeout: (r.timeout_s || 15) * 1000, t0: Date.now(), count: 0, step: 'capture' });
     if (cur().name === 'hoc') render();
     say(`Bấm nút ${L.label} trên remote ${L.total} lần`);
   } catch (e) {
+    const { device, key, label, replace } = L;
+    go('tb-' + device.id);
     if (e.code === 'ir_receiver') toast('Mắt thu IR trên bộ trung tâm không hoạt động');
-    else if (e.status === 409) toast('Mắt thu đang bận, thử lại sau');
-    else handleErr(e);
-    go('tb-' + L.device.id);
+    else if (e.code === 'receiver_busy') {
+      dialog({ title: 'Mắt thu đang bận', body: 'Có người đang học một nút khác trên bộ trung tâm. Vẫn học nút này? Phiên học kia sẽ bị hủy.',
+        actions: [{ label: 'Để sau' }, { label: 'Vẫn học', pri: true, run: () => startLearnFor(device, key, label, replace, true) }] });
+    } else handleErr(e);
   }
 }
 

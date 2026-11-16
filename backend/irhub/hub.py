@@ -55,6 +55,7 @@ class Hub:
         self.cleanup_history()
         self.transport.start()
         threading.Thread(target=self._stale_watch, daemon=True).start()
+        threading.Thread(target=self._schedule_loop, daemon=True).start()
 
     # ---------- Bộ phát ESP8266 ----------
     def on_slave_status(self, sid, data):
@@ -155,6 +156,57 @@ class Hub:
         if ack is None:
             return 'timeout', None
         return ('ok', ms) if ack.get('ok') else ('error', None)
+
+    # ---------- Ngữ cảnh ----------
+    def run_scene(self, scene_id, source='scene', text=None):
+        """Phát lần lượt các nút của ngữ cảnh, chờ delay_ms sau mỗi bước.
+        Trả {scene_id, name, status: ok|partial|error, results: [{command_id, label, device_name, status, latency_ms}]} hoặc None."""
+        scene = self.db.one('SELECT * FROM scenes WHERE id = ?', (scene_id,))
+        if not scene:
+            return None
+        steps = self.db.all('SELECT s.command_id, s.delay_ms, c.label, d.name AS device_name FROM scene_steps s '
+                            'JOIN commands c ON c.id = s.command_id JOIN devices d ON d.id = c.device_id '
+                            'WHERE s.scene_id = ? ORDER BY s.position, s.id', (scene_id,))
+        results = []
+        for i, st in enumerate(steps):
+            res = self.send_command(st['command_id'], source=source, text=text or scene['name'])
+            status, ms = (res[0], res[1]) if res else ('error', None)
+            results.append({'command_id': st['command_id'], 'label': st['label'], 'device_name': st['device_name'],
+                            'status': status, 'latency_ms': ms})
+            if i < len(steps) - 1 and st['delay_ms']:
+                time.sleep(st['delay_ms'] / 1000.0)
+        ok = sum(1 for r in results if r['status'] == 'ok')
+        status = 'ok' if results and ok == len(results) else 'partial' if ok else 'error'
+        return {'scene_id': scene_id, 'name': scene['name'], 'status': status, 'results': results}
+
+    # ---------- Hẹn giờ ----------
+    def _schedule_loop(self):
+        while True:
+            try:
+                self.run_due_schedules()
+            except Exception as e:   # không để lỗi một lần làm dừng hẳn bộ hẹn giờ
+                print('[Hẹn giờ] Lỗi:', e)
+            time.sleep(15)
+
+    def run_due_schedules(self, now=None):
+        """Chạy các hẹn giờ đến hạn trong phút hiện tại (giờ địa phương của Pi). Trả danh sách id đã chạy."""
+        now = now or time.time()
+        lt = time.localtime(now)
+        hhmm = '%02d:%02d' % (lt.tm_hour, lt.tm_min)
+        minute_start = (int(now) - lt.tm_sec) * 1000
+        due = self.db.all('SELECT * FROM schedules WHERE enabled = 1 AND at_time = ? AND (days & ?) <> 0 '
+                          'AND (last_run IS NULL OR last_run < ?)', (hhmm, 1 << lt.tm_wday, minute_start))
+        for sc in due:
+            self.db.run('UPDATE schedules SET last_run = ? WHERE id = ?', (int(now * 1000), sc['id']))
+            threading.Thread(target=self._run_schedule, args=(sc,), daemon=True).start()
+        return [sc['id'] for sc in due]
+
+    def _run_schedule(self, sc):
+        text = 'Hẹn giờ %s' % sc['at_time']
+        if sc['scene_id']:
+            self.run_scene(sc['scene_id'], source='schedule', text=text)
+        else:
+            self.send_command(sc['command_id'], source='schedule', text=text)
 
     def send_command(self, command_id, source='web', text=None):
         """Tra mã → gửi qua MQTT → chờ ACK → ghi lịch sử. Trả (status, latency_ms, entry) hoặc None."""

@@ -1,0 +1,3 @@
+# Chạy kiểm thử: pip install -r requirements-dev.txt && python -m pytest
+-r requirements.txt
+pytest>=8

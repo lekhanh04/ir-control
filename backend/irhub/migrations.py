@@ -4,6 +4,7 @@ Phiên bản cấu trúc lưu trong PRAGMA user_version:
     0/1  bản đầu tiên (chưa đánh số): mỗi phòng một bộ phát, loại thiết bị cố định trong CHECK
     2    nhiều bộ phát mỗi phòng + devices.slave_id, bảng device_types, tên không trùng,
          history.status 'not_understood', chỉ mục, thời gian giữ lịch sử
+    3    ngữ cảnh (scenes, scene_steps), hẹn giờ (schedules), history.source thêm 'scene', 'schedule'
 
 Quy trình khi đổi cấu trúc về sau:
     1. Sửa schema.sql cho đúng cấu trúc mới (dùng khi tạo CSDL mới).
@@ -16,7 +17,7 @@ import re
 import sqlite3
 import time
 
-LATEST = 2
+LATEST = 3
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
 
 
@@ -105,7 +106,19 @@ def _v1_to_v2(c, json_ok, log):
         c.execute('DROP TABLE %s_v1' % t)
 
 
-STEPS = {1: _v1_to_v2}
+def _v2_to_v3(c, json_ok, log):
+    # Bảng mới được tạo bởi schema.sql (CREATE IF NOT EXISTS). Riêng history phải dựng lại để đổi CHECK của source.
+    c.execute('DROP INDEX IF EXISTS idx_history_at')
+    c.execute('DROP INDEX IF EXISTS idx_history_device')
+    c.execute('ALTER TABLE history RENAME TO history_v2')
+    for s in schema_statements(json_ok):
+        c.execute(s)
+    c.execute('INSERT INTO history (id, at, device_id, room_name, device_name, key, label, source, text, slave_id, status, latency_ms) '
+              'SELECT id, at, device_id, room_name, device_name, key, label, source, text, slave_id, status, latency_ms FROM history_v2')
+    c.execute('DROP TABLE history_v2')
+
+
+STEPS = {1: _v1_to_v2, 2: _v2_to_v3}
 
 
 def migrate(path, log=print):

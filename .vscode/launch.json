@@ -21,6 +21,16 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "Kiểm thử (pytest)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q"],
+      "cwd": "${workspaceFolder}/backend",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
       "name": "ESP8266 giả (MQTT)",
       "type": "debugpy",
       "request": "launch",
