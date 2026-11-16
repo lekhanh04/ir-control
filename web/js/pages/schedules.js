@@ -33,7 +33,8 @@ export function schedulesPage(v) {
 
   const list = S.schedules.map((s) => `<section class="card"><div class="row" style="gap:12px">
       <span class="tm${s.enabled ? '' : ' muted'}">${esc(s.at_time)}</span>
-      <div class="grow"><b>${esc(title(s))}</b><br><span class="small muted">${esc(daysText(s.days))}</span></div>
+      <div class="grow"><b>${esc(title(s))}</b><br><span class="small muted">${esc(daysText(s.days))}</span>` +
+      (s.scene_id && !s.scene_steps ? '<br><span class="badge warn">Ngữ cảnh không còn bước nào, hẹn giờ sẽ tự tắt</span>' : '') + `</div>
       <button type="button" class="switch" role="switch" data-tog="${s.id}" aria-checked="${s.enabled}" aria-label="Bật hẹn giờ ${esc(s.at_time)}"></button></div>
       <div class="row"><button type="button" class="btn sm ghost" data-edit="${s.id}">${ic('pen')}Sửa</button>
       <button type="button" class="btn sm ghost" style="color:var(--danger)" data-del="${s.id}">Xóa</button></div></section>`).join('');

@@ -212,4 +212,4 @@ def test_unknown_api_is_json_404(client):
 
 def test_system(client):
     s = client.get('/api/system').get_json()
-    assert s['db_schema'] == 3 and s['simulate'] is True
+    assert s['db_schema'] == 4 and s['simulate'] is True

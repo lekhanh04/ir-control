@@ -76,11 +76,12 @@ class VoiceService:
     # ---------- cài đặt ----------
     def settings(self):
         db = self.hub.db
-        room = db.get_setting('voice.default_room_id')
+        room = db.get_setting('voice.default_room_id') or ''
+        sens = db.get_setting('voice.sensitivity', 'mid')
         return {
             'enabled': db.get_setting('voice.enabled', '1') == '1',
-            'sensitivity': db.get_setting('voice.sensitivity', 'mid'),
-            'default_room_id': int(room) if room else None,
+            'sensitivity': sens if sens in SENSITIVITY else 'mid',
+            'default_room_id': int(room) if room.isdigit() else None,   # giá trị hỏng không được làm hỏng cả tính năng
         }
 
     def public(self):

@@ -9,8 +9,8 @@ import time
 
 from flask import Blueprint, Response, after_this_request, current_app, jsonify, request, send_file
 
+from . import backup as backups
 from .db import now_ms
-from .hub import public_slave
 from .learn import ReceiverBusy
 
 bp = Blueprint('api', __name__, url_prefix='/api')
@@ -89,7 +89,7 @@ def system():
         cpu = None
     du = shutil.disk_usage(os.path.dirname(os.path.abspath(h.cfg.DB_PATH)))
     return jsonify(uptime_s=uptime, cpu_temp_c=cpu, disk_used_mb=du.used // 2**20, disk_total_mb=du.total // 2**20,
-                   db_size_kb=os.path.getsize(h.cfg.DB_PATH) // 1024, db_schema=h.db.version, mqtt='ok' if h.transport.healthy() else 'error',
+                   db_size_kb=h.db.size_bytes() // 1024, db_schema=h.db.version, mqtt='ok' if h.transport.healthy() else 'error',
                    ir_receiver='ok' if h.receiver and h.receiver.healthy() else 'error', version=h.cfg.VERSION, simulate=h.cfg.SIMULATE)
 
 
@@ -107,6 +107,45 @@ def backup():
             pass
         return resp
     return send_file(path, as_attachment=True, download_name=time.strftime('irhub-backup-%Y%m%d-%H%M.db'))
+
+
+@bp.get('/backups')
+def backups_list():
+    """Bản sao lưu tự động hằng ngày và bản sao an toàn tạo trước mỗi lần khôi phục."""
+    return jsonify(keep=hub().cfg.BACKUP_KEEP, items=backups.list_backups(hub().cfg.DB_PATH))
+
+
+@bp.get('/backups/<name>')
+def backups_download(name):
+    p = backups.backup_path(hub().cfg.DB_PATH, name)
+    if not p:
+        return err(404, 'not_found', 'Không có bản sao lưu này')
+    return send_file(p, as_attachment=True, download_name=name)
+
+
+@bp.post('/restore')
+def restore():
+    """Khôi phục từ file tải lên (multipart, trường "file") hoặc từ bản sao lưu trên Pi ({"name": "..."})."""
+    h = hub()
+    up = request.files.get('file')
+    tmp = None
+    try:
+        if up:
+            fd, tmp = tempfile.mkstemp(suffix='.db', dir=os.path.dirname(os.path.abspath(h.cfg.DB_PATH)))
+            os.close(fd)
+            up.save(tmp)
+            src = tmp
+        else:
+            src = backups.backup_path(h.cfg.DB_PATH, body().get('name'))
+            if not src:
+                return err(404, 'not_found', 'Không có bản sao lưu này')
+        safety = h.restore(src)
+    except backups.BadBackup as e:
+        return err(400, 'bad_backup', str(e))
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.remove(tmp)
+    return jsonify(ok=True, safety_backup=safety)
 
 
 @bp.get('/events')
@@ -175,6 +214,8 @@ def rooms_delete(rid):
     if db.one('SELECT id FROM devices WHERE room_id = ? LIMIT 1', (rid,)):
         return err(409, 'not_empty', 'Phòng còn thiết bị')
     _, n = db.run('DELETE FROM rooms WHERE id = ?', (rid,))
+    if n and db.get_setting('voice.default_room_id') == str(rid):
+        db.set_setting('voice.default_room_id', '')    # phòng mặc định của giọng nói không còn
     return jsonify(ok=True) if n else err(404, 'not_found', 'Không tìm thấy phòng')
 
 
@@ -198,7 +239,7 @@ def _device_body(b, partial=False, current=None):
             return None, 'Loại thiết bị không hợp lệ'
         out['type'] = b['type']
     if not partial or 'room_id' in b:
-        if not db.one('SELECT id FROM rooms WHERE id = ?', (b.get('room_id'),)):
+        if not is_int(b.get('room_id')) or not db.one('SELECT id FROM rooms WHERE id = ?', (b['room_id'],)):
             return None, 'Phòng không tồn tại'
         out['room_id'] = b['room_id']
     if 'brand' in b:
@@ -206,6 +247,8 @@ def _device_body(b, partial=False, current=None):
     room_id = out.get('room_id', current['room_id'] if current else None)
     if 'slave_id' in b:
         sid = b.get('slave_id') or None
+        if sid is not None and not isinstance(sid, str):
+            return None, 'Bộ phát không hợp lệ'
         if sid and not db.one('SELECT id FROM slaves WHERE id = ? AND room_id = ?', (sid, room_id)):
             return None, 'Bộ phát phải thuộc cùng phòng với thiết bị'
         out['slave_id'] = sid
@@ -455,6 +498,7 @@ def scenes_run(sid):
 def _schedules(sched_id=None):
     where, args = ('WHERE s.id = ?', (sched_id,)) if sched_id else ('', ())
     rows = hub().db.all('SELECT s.id, s.scene_id, s.command_id, s.at_time, s.days, s.enabled, s.last_run, '
+                        '(SELECT COUNT(*) FROM scene_steps st WHERE st.scene_id = s.scene_id) AS scene_steps, '
                         'sc.name AS scene_name, c.label AS command_label, c.device_id, d.name AS device_name, r.name AS room_name '
                         'FROM schedules s LEFT JOIN scenes sc ON sc.id = s.scene_id LEFT JOIN commands c ON c.id = s.command_id '
                         'LEFT JOIN devices d ON d.id = c.device_id LEFT JOIN rooms r ON r.id = d.room_id '
@@ -530,7 +574,7 @@ def schedules_delete(sid):
 # ---------- Bộ phát ESP8266 ----------
 @bp.get('/slaves')
 def slaves_list():
-    return jsonify([public_slave(r) for r in hub().db.all('SELECT * FROM slaves ORDER BY room_id IS NULL DESC, id')])
+    return jsonify([hub().slave_view(r) for r in hub().db.all('SELECT * FROM slaves ORDER BY room_id IS NULL DESC, id')])
 
 
 @bp.patch('/slaves/<sid>')
@@ -545,12 +589,12 @@ def slaves_update(sid):
         db.run('UPDATE slaves SET name = ? WHERE id = ?', (name, sid))
     if 'room_id' in b:
         rid = b['room_id']
-        if rid is not None and not db.one('SELECT id FROM rooms WHERE id = ?', (rid,)):
+        if rid is not None and not (is_int(rid) and db.one('SELECT id FROM rooms WHERE id = ?', (rid,))):
             return err(400, 'room', 'Phòng không tồn tại')
         # Một phòng có thể có nhiều bộ phát. Thiết bị phòng khác đang gán riêng bộ này → về "Tự động"
         db.run('UPDATE devices SET slave_id = NULL WHERE slave_id = ? AND room_id IS NOT ?', (sid, rid))
         db.run('UPDATE slaves SET room_id = ? WHERE id = ?', (rid, sid))
-    return jsonify(public_slave(db.one('SELECT * FROM slaves WHERE id = ?', (sid,))))
+    return jsonify(hub().slave_view(db.one('SELECT * FROM slaves WHERE id = ?', (sid,))))
 
 
 @bp.delete('/slaves/<sid>')
@@ -593,6 +637,9 @@ def voice_set():
     b = body()
     if 'sensitivity' in b and b['sensitivity'] not in ('low', 'mid', 'high'):
         return err(400, 'sensitivity', 'Độ nhạy không hợp lệ')
+    rid = b.get('default_room_id')
+    if rid is not None and not (is_int(rid) and hub().db.one('SELECT id FROM rooms WHERE id = ?', (rid,))):
+        return err(400, 'default_room', 'Phòng không tồn tại')
     hub().voice.update(b)
     return jsonify(hub().voice.public())
 

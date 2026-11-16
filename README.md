@@ -12,7 +12,8 @@ ir-control/
 │  │  ├─ config.py           biến cấu hình
 │  │  ├─ schema.sql          cấu trúc CSDL SQLite (phiên bản mới nhất)
 │  │  ├─ migrations.py       tự nâng cấp file CSDL cũ lên phiên bản mới, không mất dữ liệu
-│  │  ├─ db.py               truy cập SQLite
+│  │  ├─ db.py               truy cập SQLite (WAL, synchronous=NORMAL)
+│  │  ├─ backup.py           sao lưu tự động hằng ngày, kiểm tra và khôi phục file sao lưu
 │  │  ├─ api.py              REST API (+ API giả lập /api/dev)
 │  │  ├─ auth.py             đăng nhập bằng mã PIN (IRHUB_PIN)
 │  │  ├─ hub.py              điều phối: gửi lệnh, chờ ACK, ghi lịch sử, theo dõi bộ phát, ngữ cảnh, hẹn giờ
@@ -72,7 +73,7 @@ Gồm: nhận dạng giao thức IR, hiểu câu nói (kể cả trường hợp
 
 Trong VS Code: mở thư mục `ir-control`, nhấn **F5** và chọn "Backend (giả lập)". Breakpoint đặt được trong mọi file Python.
 
-Dữ liệu nằm ở `backend/data/irhub.db`. Xóa file này để làm lại từ đầu.
+Dữ liệu nằm ở `backend/data/irhub.db` (bản sao lưu tự động ở `backend/data/backups/`). Xóa thư mục `data` để làm lại từ đầu.
 
 ## Chạy thật trên Raspberry Pi
 
@@ -119,7 +120,10 @@ Trên remote, **giữ** nút âm lượng/kênh/nhiệt độ/mũi tên để g�
 
 ## Cơ sở dữ liệu và nâng cấp phiên bản
 
-- File CSDL: `backend/data/irhub.db`. Phiên bản lược đồ lưu trong `PRAGMA user_version` (hiện tại **3**), xem ở trang **Bộ trung tâm**.
+- File CSDL: `backend/data/irhub.db`. Phiên bản lược đồ lưu trong `PRAGMA user_version` (hiện tại **4**), xem ở trang **Bộ trung tâm**.
+- **Sao lưu tự động:** mỗi ngày một bản `backend/data/backups/irhub-YYYYMMDD.db`, giữ 7 bản (`IRHUB_BACKUP_KEEP`). Các bản này nằm cùng thẻ nhớ: cứu được khi file CSDL hỏng hay lỡ xóa nhầm, nhưng không cứu được khi hỏng cả thẻ, nên thỉnh thoảng hãy bấm **Tải bản sao lưu** ở trang **Bộ trung tâm** để cất về máy.
+- **Khôi phục:** trang **Bộ trung tâm** → chọn một bản tự động hoặc tải file `.db` lên. File được kiểm tra và nâng cấp lên cấu trúc hiện tại; dữ liệu đang dùng được tự lưu thành `irhub-truoc-khoi-phuc-<thời gian>.db` trước khi thay, nên khôi phục nhầm vẫn quay lại được.
+- **Đỡ hao thẻ nhớ:** CSDL chạy WAL với `synchronous=NORMAL`; status 30 giây/lần của bộ phát chỉ cập nhật bộ nhớ, chỉ ghi xuống thẻ khi có thay đổi (trạng thái, IP, firmware) hoặc 10 phút/lần (`SLAVE_DB_REFRESH_S`).
 - Khi khởi động, `migrations.py` kiểm tra phiên bản. Nếu file cũ hơn, nó **tự sao lưu** thành `irhub.db.bak-v1-<ngày giờ>` rồi nâng cấp trong một giao dịch: lỗi giữa chừng thì quay lại nguyên trạng.
 - Phiên bản 2 so với 1:
   - Một phòng có nhiều bộ phát; thiết bị có thể gán riêng một bộ (`devices.slave_id`, để trống = tự chọn).
@@ -130,4 +134,6 @@ Trên remote, **giữ** nút âm lượng/kênh/nhiệt độ/mũi tên để g�
 - Phiên bản 3 so với 2:
   - Bảng `scenes`, `scene_steps` (ngữ cảnh) và `schedules` (hẹn giờ).
   - `history.source` nhận thêm `scene`, `schedule`.
+- Phiên bản 4 so với 3: dựng lại bảng `rooms` cho đúng `schema.sql`. CSDL nâng cấp từ bản đầu tiên (v1) còn giữ bảng `rooms` cũ (thiếu kiểm tra độ dài, không so trùng hoa/thường). Tên phòng trùng được đổi thành "Tên (2)"; id phòng giữ nguyên.
+- Kiểm thử `tests/test_database.py` bảo đảm CSDL nâng cấp từ bản cũ có **cấu trúc giống hệt** CSDL tạo mới.
 - Thay đổi lược đồ sau này: sửa `schema.sql`, tăng `LATEST` và thêm một bước vào `STEPS` trong `migrations.py`.

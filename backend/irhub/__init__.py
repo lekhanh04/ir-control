@@ -11,6 +11,7 @@ from .hub import Hub
 def create_app(cfg=Config):
     app = Flask(__name__, static_folder=None)
     app.json.ensure_ascii = False
+    app.config['MAX_CONTENT_LENGTH'] = 64 * 2**20     # file sao lưu tải lên để khôi phục
     hub = Hub(cfg)
     app.extensions['irhub'] = hub
     app.extensions['irhub_auth'] = Auth(app, hub)

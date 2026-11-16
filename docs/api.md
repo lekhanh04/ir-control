@@ -15,7 +15,10 @@ Thời gian (`at`, `last_seen`, `last_run`) tính bằng mili giây Unix.
 |---|---|---|---|---|
 | GET | `/system` | — | `uptime_s, cpu_temp_c, disk_used_mb, disk_total_mb, db_size_kb, db_schema, mqtt, ir_receiver, version, simulate` | — |
 | GET | `/events` | — | Server-Sent Events: `slave`, `history`, `voice` | — |
-| GET | `/backup` | — | file `.db` (SQLite) | — |
+| GET | `/backup` | — | file `.db` (SQLite), bản sao tại thời điểm gọi | — |
+| GET | `/backups` | — | `{keep, items: [{name, size_kb, at}]}` bản sao lưu trên Pi (tự động hằng ngày `irhub-YYYYMMDD.db`, và `irhub-truoc-khoi-phuc-*.db`), mới nhất trước | — |
+| GET | `/backups/{name}` | — | tải file sao lưu đó | 404 |
+| POST | `/restore` | multipart, trường `file` (file `.db`) **hoặc** JSON `{name}` (bản trên Pi) | `{ok, safety_backup}`. File được kiểm tra (`integrity_check`, đúng bảng, không mới hơn phần mềm), nâng cấp lên cấu trúc hiện tại; CSDL đang dùng được lưu thành `safety_backup` trước khi thay. Giữ nguyên khóa đăng nhập | 400 `bad_backup`, 404 |
 | GET | `/settings` | — | `{history_retention_days}` | — |
 | PATCH | `/settings` | `{history_retention_days}` (0 = giữ mãi, tối đa 3650) | như GET; xóa ngay lịch sử quá hạn | 400 `retention` |
 | GET | `/device-types` | — | `[{code, label}]` theo thứ tự hiển thị (bảng `device_types`) | — |
@@ -24,7 +27,7 @@ Thời gian (`at`, `last_seen`, `last_run`) tính bằng mili giây Unix.
 | PATCH | `/rooms/{id}` | `{name}` | `{id, name}` | 400, 409 `exists`, 404 |
 | DELETE | `/rooms/{id}` | — | `{ok}` | 409 `not_empty`, 404 |
 | GET | `/devices` | — | `[{id, room_id, type, name, brand, slave_id, command_count}]` | — |
-| POST | `/devices` | `{name, type, room_id, brand?, slave_id?}` | thiết bị | 400 `invalid`, 409 `name_exists` |
+| POST | `/devices` | `{name, type, room_id, brand?, slave_id?}` (`room_id` phải là số nguyên) | thiết bị | 400 `invalid`, 409 `name_exists` |
 | PATCH | `/devices/{id}` | trường cần đổi | thiết bị (đổi phòng mà không gửi `slave_id` → `slave_id` về `null`) | 400, 404, 409 `name_exists` |
 | DELETE | `/devices/{id}` | — | `{ok}` (xóa kèm nút, giữ lịch sử) | 404 |
 | GET | `/devices/{id}/commands` | — | `[{id, key, label, kind, protocol, value, address, command, bits, carrier_khz, raw_len, match_pct}]` | — |
@@ -45,13 +48,13 @@ Thời gian (`at`, `last_seen`, `last_run`) tính bằng mili giây Unix.
 | PUT | `/scenes/{id}` | như POST (thay toàn bộ) | ngữ cảnh | 400, 404, 409 |
 | DELETE | `/scenes/{id}` | — | `{ok}` (xóa kèm hẹn giờ dùng nó) | 404 |
 | POST | `/scenes/{id}/run` | — | `{scene_id, name, status: ok\|partial\|error, results: [{command_id, label, device_name, status, latency_ms}]}` sau khi chạy xong mọi bước | 404 |
-| GET | `/schedules` | — | `[{id, scene_id, command_id, at_time, days, enabled, last_run, scene_name, command_label, device_id, device_name, room_name}]` theo giờ | — |
+| GET | `/schedules` | — | `[{id, scene_id, command_id, at_time, days, enabled, last_run, scene_steps, scene_name, command_label, device_id, device_name, room_name}]` theo giờ. `scene_steps` = số bước còn lại của ngữ cảnh; hẹn giờ của ngữ cảnh 0 bước tự tắt khi đến giờ | — |
 | POST | `/schedules` | `{scene_id \| command_id, at_time: "HH:MM", days?: 1–127, enabled?}` | hẹn giờ | 400 `invalid` |
 | PATCH | `/schedules/{id}` | trường cần đổi | hẹn giờ | 400, 404 |
 | DELETE | `/schedules/{id}` | — | `{ok}` | 404 |
 | GET | `/history` | `?limit=60` | `[{id, at, device_id, room_name, device_name, key, label, source, text, slave_id, status, latency_ms}]` mới nhất trước. `source`: `web, voice, scene, schedule` (`text` = câu nói / tên ngữ cảnh / "Hẹn giờ HH:MM"). `status`: `ok, offline, timeout, error, not_understood` (câu nói không hiểu: chỉ có `source=voice`, `text`) | — |
 | GET | `/voice` | — | `{enabled, sensitivity, default_room_id, module: ok\|missing}` | — |
-| POST | `/voice` | `{enabled?, sensitivity?, default_room_id?}` | như GET | 400 |
+| POST | `/voice` | `{enabled?, sensitivity?, default_room_id?}` (`default_room_id`: id phòng có thật hoặc `null`) | như GET | 400 `sensitivity`, 400 `default_room` |
 
 `decoded` = `{protocol, value, address, command, bits}` hoặc `null` (lưu RAW). `protocol`: `NEC`, `SAMSUNG`, `SONY`, `PANASONIC`.
 

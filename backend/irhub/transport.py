@@ -44,15 +44,35 @@ class MqttTransport:
             p = self.p
             client.subscribe([('%s/slave/+/status' % p, 1), ('%s/slave/+/ack' % p, 1),
                               ('%s/voice/status' % p, 1), ('%s/voice/listening' % p, 0), ('%s/voice/result' % p, 1)])
-            self.hub.voice.push_config()
+            try:
+                self.hub.voice.push_config()
+            except Exception as e:
+                print('[MQTT] Không gửi được cấu hình giọng nói:', e)
+
+    def resync(self):
+        """Đăng ký lại topic status để broker gửi lại status (retained) của mọi bộ phát — dùng sau khi khôi phục CSDL."""
+        if self.connected:
+            topic = '%s/slave/+/status' % self.p
+            self.client.unsubscribe(topic)
+            self.client.subscribe(topic, 1)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
         self.connected = False
 
     def _on_message(self, client, userdata, msg):
+        # paho-mqtt ném lại lỗi từ callback và luồng mạng sẽ CHẾT HẲN (không còn nhận ACK, status, giọng nói).
+        # Vì vậy mọi lỗi (vd CSDL bị khóa, thẻ nhớ đầy) chỉ được ghi log ở đây.
+        try:
+            self._dispatch(msg)
+        except Exception as e:
+            print('[MQTT] Lỗi khi xử lý %s: %r' % (msg.topic, e))
+
+    def _dispatch(self, msg):
         try:
             data = json.loads(msg.payload.decode('utf-8') or '{}')
         except ValueError:
+            return
+        if not isinstance(data, dict):
             return
         parts = msg.topic.split('/')
         if len(parts) == 4 and parts[1] == 'slave':
@@ -118,6 +138,11 @@ class SimTransport:
 
     def healthy(self):
         return True
+
+    def resync(self):
+        for sid, online in list(self.online.items()):
+            if online:
+                self.hub.on_slave_status(sid, {'online': True})
 
     def set_online(self, sid, online, ip=None, rssi=None):
         self.online[sid] = online

@@ -46,6 +46,9 @@ class Config:
 
     ACK_TIMEOUT_S = float(os.getenv('ACK_TIMEOUT_S', '3'))
     SLAVE_STALE_S = int(os.getenv('SLAVE_STALE_S', '90'))   # quá lâu không có status → coi là mất kết nối
+    # Status 30 s/lần chỉ cập nhật bộ nhớ; ghi xuống thẻ nhớ khi có thay đổi hoặc tối đa mỗi SLAVE_DB_REFRESH_S giây
+    SLAVE_DB_REFRESH_S = int(os.getenv('SLAVE_DB_REFRESH_S', '600'))
+    BACKUP_KEEP = int(os.getenv('IRHUB_BACKUP_KEEP', '7'))   # số bản sao lưu tự động hằng ngày giữ lại (0 = tắt)
     LEARN_CAPTURES = int(os.getenv('LEARN_CAPTURES', '3'))
     LEARN_TIMEOUT_S = int(os.getenv('LEARN_TIMEOUT_S', '15'))
     LEARN_MIN_MATCH = int(os.getenv('LEARN_MIN_MATCH', '90'))  # % độ khớp tối thiểu giữa các lần thu
@@ -53,4 +56,4 @@ class Config:
     # Mã PIN đăng nhập giao diện web và API (4–12 chữ số). Để trống = không cần đăng nhập.
     PIN = os.getenv('IRHUB_PIN', '').strip()
 
-    VERSION = '1.2.0'
+    VERSION = '1.3.0'

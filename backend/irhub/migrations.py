@@ -5,6 +5,8 @@ Phiên bản cấu trúc lưu trong PRAGMA user_version:
     2    nhiều bộ phát mỗi phòng + devices.slave_id, bảng device_types, tên không trùng,
          history.status 'not_understood', chỉ mục, thời gian giữ lịch sử
     3    ngữ cảnh (scenes, scene_steps), hẹn giờ (schedules), history.source thêm 'scene', 'schedule'
+    4    dựng lại bảng rooms theo đúng schema.sql (CSDL nâng cấp từ v1 còn giữ bảng rooms cũ:
+         thiếu CHECK độ dài, UNIQUE không NOCASE)
 
 Quy trình khi đổi cấu trúc về sau:
     1. Sửa schema.sql cho đúng cấu trúc mới (dùng khi tạo CSDL mới).
@@ -17,7 +19,7 @@ import re
 import sqlite3
 import time
 
-LATEST = 3
+LATEST = 4
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
 
 
@@ -118,7 +120,29 @@ def _v2_to_v3(c, json_ok, log):
     c.execute('DROP TABLE history_v2')
 
 
-STEPS = {1: _v1_to_v2, 2: _v2_to_v3}
+def _rooms_sql(json_ok):
+    return next(s for s in schema_statements(json_ok) if s.startswith('CREATE TABLE IF NOT EXISTS rooms '))
+
+
+def _v3_to_v4(c, json_ok, log):
+    # Quy trình SQLite khuyên dùng khi đổi định nghĩa bảng có khóa ngoại trỏ tới (foreign_keys đang OFF):
+    # tạo bảng mới → chép → xóa bảng cũ → đổi tên bảng mới. KHÔNG đổi tên bảng cũ trước, vì SQLite sẽ sửa
+    # theo tham chiếu REFERENCES rooms trong devices/slaves sang tên mới.
+    seq = c.execute("SELECT seq FROM sqlite_sequence WHERE name = 'rooms'").fetchone()
+    c.execute(_rooms_sql(json_ok).replace('CREATE TABLE IF NOT EXISTS rooms ', 'CREATE TABLE rooms_new ', 1))
+    seen = set()
+    for r in _rows(c, 'SELECT id, name, created_at FROM rooms ORDER BY id'):
+        name = _unique(r['name'], seen, 24)
+        if name != r['name']:
+            log('  đổi tên phòng không hợp lệ/trùng: "%s" → "%s"' % (r['name'], name))
+        c.execute('INSERT INTO rooms_new (id, name, created_at) VALUES (?, ?, ?)', (r['id'], name, r['created_at']))
+    c.execute('DROP TABLE rooms')
+    c.execute('ALTER TABLE rooms_new RENAME TO rooms')
+    if seq:   # giữ bộ đếm AUTOINCREMENT: id phòng đã xóa không được dùng lại
+        c.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'rooms'", (seq[0],))
+
+
+STEPS = {1: _v1_to_v2, 2: _v2_to_v3, 3: _v3_to_v4}
 
 
 def migrate(path, log=print):

@@ -1,4 +1,4 @@
--- Cơ sở dữ liệu SQLite của bộ trung tâm (Raspberry Pi 4B) – phiên bản cấu trúc 3
+-- Cơ sở dữ liệu SQLite của bộ trung tâm (Raspberry Pi 4B) – phiên bản cấu trúc 4
 -- Phòng → Thiết bị → Lệnh (mã IR); bộ phát ESP8266 theo phòng; ngữ cảnh, hẹn giờ; lịch sử điều khiển.
 -- Thời gian *_at, last_seen tính bằng mili giây Unix (UTC).
 --

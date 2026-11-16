@@ -1,4 +1,8 @@
-"""Truy cập SQLite. Mỗi lệnh mở một kết nối riêng nên dùng an toàn từ nhiều luồng."""
+"""Truy cập SQLite. Mỗi lệnh mở một kết nối riêng nên dùng an toàn từ nhiều luồng.
+
+CSDL chạy chế độ WAL (đặt trong migrations.py) với synchronous=NORMAL: ít lần ghi đồng bộ xuống thẻ nhớ
+hơn FULL; mất điện đột ngột chỉ có thể mất giao dịch cuối, không làm hỏng file.
+"""
 import os
 import sqlite3
 import time
@@ -20,6 +24,7 @@ class Database:
         c = sqlite3.connect(self.path, timeout=5)
         c.row_factory = sqlite3.Row
         c.execute('PRAGMA foreign_keys = ON')
+        c.execute('PRAGMA synchronous = NORMAL')
         return c
 
     def all(self, sql, args=()):
@@ -57,3 +62,17 @@ class Database:
         finally:
             dst.close()
             src.close()
+
+    def restore_from(self, src_path):
+        """Chép đè toàn bộ nội dung CSDL đang chạy bằng file src_path (đã kiểm tra, đã nâng cấp).
+        Dùng backup API của SQLite nên các kết nối khác chỉ phải chờ khóa, không cần dừng chương trình."""
+        src, dst = sqlite3.connect(src_path), self.connect()
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+
+    def size_bytes(self):
+        """Dung lượng thật trên thẻ nhớ: file chính + file WAL (nếu có)."""
+        return sum(os.path.getsize(p) for p in (self.path, self.path + '-wal') if os.path.exists(p))

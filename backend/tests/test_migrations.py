@@ -48,8 +48,8 @@ def q(path, sql):
 
 def test_upgrade_v1_to_latest(v1_db):
     logs = []
-    assert migrations.migrate(v1_db, log=logs.append) == migrations.LATEST == 3
-    assert q(v1_db, 'PRAGMA user_version')[0][0] == 3
+    assert migrations.migrate(v1_db, log=logs.append) == migrations.LATEST == 4
+    assert q(v1_db, 'PRAGMA user_version')[0][0] == 4
     assert glob.glob(v1_db + '.bak-v1-*'), 'phải có bản sao lưu trước khi nâng cấp'
     # tên trùng (không phân biệt hoa thường) được đổi
     assert [r[0] for r in q(v1_db, 'SELECT name FROM devices ORDER BY id')] == ['Tivi', 'tivi (2)']
@@ -58,7 +58,7 @@ def test_upgrade_v1_to_latest(v1_db):
     assert q(v1_db, 'SELECT COUNT(*) FROM commands')[0][0] == 2
     assert q(v1_db, 'SELECT source, status, latency_ms FROM history') == [('web', 'ok', 120)]
     assert q(v1_db, 'SELECT id, room_id FROM slaves') == [('esp-1', 1)]
-    # bảng mới của v3 có mặt, history nhận nguồn 'scene'
+    # bảng mới của v3 có mặt (v4 không thêm bảng), history nhận nguồn 'scene'
     tables = {r[0] for r in q(v1_db, "SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {'scenes', 'scene_steps', 'schedules', 'device_types'} <= tables
     c = sqlite3.connect(v1_db)
@@ -71,7 +71,7 @@ def test_upgrade_v1_to_latest(v1_db):
 
 def test_latest_is_noop(v1_db):
     migrations.migrate(v1_db, log=lambda *_: None)
-    assert migrations.migrate(v1_db, log=lambda *_: None) == 3
+    assert migrations.migrate(v1_db, log=lambda *_: None) == 4
     assert len(glob.glob(v1_db + '.bak-*')) == 1
 
 
@@ -87,5 +87,5 @@ def test_newer_db_is_refused(tmp_path):
 
 def test_fresh_db(tmp_path):
     path = str(tmp_path / 'fresh.db')
-    assert migrations.migrate(path) == 3
+    assert migrations.migrate(path) == 4
     assert q(path, "SELECT value FROM settings WHERE key = 'history.retention_days'") == [('90',)]

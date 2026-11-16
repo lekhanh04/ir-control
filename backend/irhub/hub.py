@@ -4,6 +4,7 @@ import re
 import threading
 import time
 
+from . import backup
 from .db import Database, now_ms
 from .events import EventBus
 from .learn import LearnManager
@@ -18,6 +19,10 @@ def public_slave(row):
     return dict(row, online=bool(row['online']))
 
 
+def _as_int(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
 class Hub:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -27,6 +32,9 @@ class Hub:
         self.sim_fail_ack = False          # chỉ dùng ở chế độ giả lập
         self._slave_locks = {}
         self._locks_guard = threading.Lock()
+        # Trạng thái bộ phát mới nhất trong bộ nhớ: sid → {last_seen, rssi, db_at}. Giảm ghi thẻ nhớ (xem on_slave_status).
+        self._live = {}
+        self._live_lock = threading.Lock()
 
         if cfg.SIMULATE:
             from .transport import SimTransport
@@ -53,43 +61,104 @@ class Hub:
         # Sau khi khởi động lại, chưa biết bộ phát nào còn sống: chờ status mới
         self.db.run('UPDATE slaves SET online = 0')
         self.cleanup_history()
+        self.auto_backup()
         self.transport.start()
         threading.Thread(target=self._stale_watch, daemon=True).start()
         threading.Thread(target=self._schedule_loop, daemon=True).start()
 
     # ---------- Bộ phát ESP8266 ----------
     def on_slave_status(self, sid, data):
-        """Gọi khi nhận irhub/slave/<id>/status (định kỳ 30 s, retained; LWT = online:false)."""
-        if not SLAVE_ID_RE.match(sid or ''):
+        """Gọi khi nhận irhub/slave/<id>/status (định kỳ 30 s, retained; LWT = online:false).
+
+        Mỗi lần nhận chỉ cập nhật bộ nhớ (last_seen, rssi). Chỉ ghi CSDL khi bộ phát mới xuất hiện, đổi trạng thái
+        hoạt động / IP / firmware, hoặc đã quá SLAVE_DB_REFRESH_S giây kể từ lần ghi trước — đỡ hao thẻ nhớ."""
+        if not SLAVE_ID_RE.match(sid or '') or not isinstance(data, dict):
             return
         online = 1 if data.get('online') else 0
+        ip = data.get('ip') if isinstance(data.get('ip'), str) else None
+        fw = data.get('fw') if isinstance(data.get('fw'), str) else None
+        rssi = _as_int(data.get('rssi'))
         now = now_ms()
         row = self.db.one('SELECT * FROM slaves WHERE id = ?', (sid,))
+        live = self._live.get(sid) or {}
+        if rssi is None:
+            rssi = live.get('rssi')
+        changed = not row or bool(row['online']) != bool(online) or bool(ip and ip != row['ip']) or bool(fw and fw != row['fw'])
+        due = online and now - live.get('db_at', 0) >= self.cfg.SLAVE_DB_REFRESH_S * 1000
+        wrote = False
         if not row:
             self.db.run('INSERT INTO slaves (id, name, online, ip, rssi, fw, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                        (sid, 'ESP8266 %s' % sid[-4:], online, data.get('ip'), data.get('rssi'), data.get('fw'), now))
-        else:
+                        (sid, 'ESP8266 %s' % sid[-4:], online, ip, rssi, fw, now))
+            wrote = True
+        elif changed or due:
+            last_seen = now if online else (live.get('last_seen') or row['last_seen'] or now)
             self.db.run('UPDATE slaves SET online = ?, ip = COALESCE(?, ip), rssi = COALESCE(?, rssi), fw = COALESCE(?, fw), '
-                        'last_seen = CASE WHEN ? THEN ? ELSE COALESCE(last_seen, ?) END WHERE id = ?',
-                        (online, data.get('ip'), data.get('rssi'), data.get('fw'), online, now, now, sid))
-        changed = public_slave(self.db.one('SELECT * FROM slaves WHERE id = ?', (sid,)))
-        if not row or bool(row['online']) != bool(online) or online:
-            self.events.publish('slave', changed)
+                        'last_seen = ? WHERE id = ?', (online, ip, rssi, fw, last_seen, sid))
+            wrote = True
+        with self._live_lock:
+            if online:
+                self._live[sid] = {'last_seen': now, 'rssi': rssi, 'db_at': now if wrote else live.get('db_at', 0)}
+            else:
+                self._live.pop(sid, None)
+        if changed or online:
+            self.events.publish('slave', self.slave_view(self.db.one('SELECT * FROM slaves WHERE id = ?', (sid,))))
+
+    def slave_view(self, row):
+        """Dòng slaves gửi cho giao diện, ghép last_seen / rssi mới nhất trong bộ nhớ."""
+        out = public_slave(row)
+        if out and out['online']:
+            live = self._live.get(out['id'])
+            if live:
+                out['last_seen'] = live['last_seen']
+                if live.get('rssi') is not None:
+                    out['rssi'] = live['rssi']
+        return out
+
+    def check_stale(self, now=None):
+        """Bộ phát quá SLAVE_STALE_S giây không gửi status → mất kết nối (ghi CSDL kèm thời điểm thấy lần cuối)."""
+        limit = (now or now_ms()) - self.cfg.SLAVE_STALE_S * 1000
+        out = []
+        for s in self.db.all('SELECT * FROM slaves WHERE online = 1'):
+            seen = (self._live.get(s['id']) or {}).get('last_seen') or s['last_seen'] or 0
+            if seen < limit:
+                with self._live_lock:
+                    live = self._live.pop(s['id'], None) or {}
+                self.db.run('UPDATE slaves SET online = 0, last_seen = ?, rssi = COALESCE(?, rssi) WHERE id = ?',
+                            (seen, live.get('rssi'), s['id']))
+                self.events.publish('slave', public_slave(dict(s, online=0, last_seen=seen)))
+                out.append(s['id'])
+        return out
 
     def _stale_watch(self):
-        """ESP8266 gửi status 30 s/lần. Quá SLAVE_STALE_S giây không thấy → đánh dấu mất kết nối.
-        Mỗi giờ dọn lịch sử cũ một lần."""
-        last_clean = time.time()
+        """Mỗi 15 giây kiểm tra bộ phát mất kết nối. Mỗi giờ dọn lịch sử cũ và tạo bản sao lưu hằng ngày (nếu chưa có)."""
+        last_hourly = time.time()
         while True:
             time.sleep(15)
-            if time.time() - last_clean > 3600:
-                last_clean = time.time()
-                self.cleanup_history()
-            limit = now_ms() - self.cfg.SLAVE_STALE_S * 1000
-            stale = self.db.all('SELECT * FROM slaves WHERE online = 1 AND last_seen < ?', (limit,))
-            for s in stale:
-                self.db.run('UPDATE slaves SET online = 0 WHERE id = ?', (s['id'],))
-                self.events.publish('slave', public_slave(dict(s, online=0)))
+            try:
+                if time.time() - last_hourly > 3600:
+                    last_hourly = time.time()
+                    self.cleanup_history()
+                    self.auto_backup()
+                self.check_stale()
+            except Exception as e:      # lỗi CSDL tạm thời không được làm dừng hẳn luồng theo dõi
+                print('[Theo dõi] Lỗi:', e)
+
+    # ---------- Sao lưu / khôi phục ----------
+    def auto_backup(self):
+        try:
+            return backup.daily_backup(self.db, self.cfg.BACKUP_KEEP)
+        except Exception as e:
+            print('[Sao lưu] Không tạo được bản sao lưu:', e)
+            return None
+
+    def restore(self, src_path):
+        """Khôi phục CSDL rồi làm mới trạng thái bộ phát. Ném backup.BadBackup nếu file không dùng được."""
+        safety = backup.restore(self.db, src_path)
+        with self._live_lock:
+            self._live.clear()
+        self.db.run('UPDATE slaves SET online = 0')
+        self.transport.resync()      # nhận lại status (retained) của các bộ phát đang chạy
+        return safety
 
     def slave_for_device(self, dev):
         """Bộ phát dùng cho thiết bị: bộ được gán riêng (devices.slave_id) nếu có,
@@ -196,10 +265,17 @@ class Hub:
         minute_start = (int(now) - lt.tm_sec) * 1000
         due = self.db.all('SELECT * FROM schedules WHERE enabled = 1 AND at_time = ? AND (days & ?) <> 0 '
                           'AND (last_run IS NULL OR last_run < ?)', (hhmm, 1 << lt.tm_wday, minute_start))
+        ran = []
         for sc in due:
+            if sc['scene_id'] and not self.db.one('SELECT 1 FROM scene_steps WHERE scene_id = ? LIMIT 1', (sc['scene_id'],)):
+                # Ngữ cảnh mất hết bước (thiết bị/nút đã bị xóa): tắt hẹn giờ thay vì mỗi ngày chạy mà không làm gì
+                self.db.run('UPDATE schedules SET enabled = 0, last_run = ? WHERE id = ?', (int(now * 1000), sc['id']))
+                print('[Hẹn giờ] Tắt hẹn giờ %s lúc %s: ngữ cảnh không còn bước nào' % (sc['id'], sc['at_time']))
+                continue
             self.db.run('UPDATE schedules SET last_run = ? WHERE id = ?', (int(now * 1000), sc['id']))
             threading.Thread(target=self._run_schedule, args=(sc,), daemon=True).start()
-        return [sc['id'] for sc in due]
+            ran.append(sc['id'])
+        return ran
 
     def _run_schedule(self, sc):
         text = 'Hẹn giờ %s' % sc['at_time']
